@@ -480,6 +480,10 @@ action = "overview-open"
 # curve = "spring:1,900"
 # duration_ms = 250 # For non-spring curves; a spring sets its own length.
 
+# Deform a floating window like an elastic sheet during pointer resizes.
+# [animation.windows_resize]
+# physics = false
+
 # Optional live workspace reveal (see docs/user/animation.md).
 # Add the bundled effects/animation/workspace_wipe/effect.toml to your includes.
 # [animation.workspaces]

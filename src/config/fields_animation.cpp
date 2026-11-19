@@ -192,6 +192,7 @@ namespace umbriel {
       static const registry::Fields<A::WindowsMove> windowsMove = eventFields<A::WindowsMove>({});
       static const registry::Fields<A::WindowsResize> windowsResize = timelineFields<A::WindowsResize>({
           registry::boolean("enabled", &A::WindowsResize::enabled),
+          registry::boolean("physics", &A::WindowsResize::physics),
       });
       static const registry::Fields<A::Workspaces> workspaces =
           eventFields<A::Workspaces>({styleField<A::Workspaces>({"slide", "reveal"})});

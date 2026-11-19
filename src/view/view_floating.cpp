@@ -424,7 +424,13 @@ namespace umbriel {
     if (m_floating.pendingSize() == std::optional{std::array{width, height}}) {
       return;
     }
-    m_pointerResizeSettling = false;
+    if (m_pointerResizeSettling) {
+      m_pointerResizeSettling = false;
+      if (!sizeGrabTracksPointer() && m_dragResizeEdges != DragPhysics::ResizeEdge::None) {
+        m_dragPhysics.release();
+        m_dragResizeEdges = DragPhysics::ResizeEdge::None;
+      }
+    }
     m_floating.setPendingSize(width, height);
 
     // Replace queued pointer targets without flooding a client retaining its buffer.
@@ -483,7 +489,13 @@ namespace umbriel {
     m_floating.clearSizeRequest();
     m_floatingSizeConfigure.reset();
     m_xwaylandResizeConfigurePending = false;
-    m_pointerResizeSettling = false;
+    if (m_pointerResizeSettling) {
+      m_pointerResizeSettling = false;
+      if (!sizeGrabTracksPointer() && m_dragResizeEdges != DragPhysics::ResizeEdge::None) {
+        m_dragPhysics.release();
+        m_dragResizeEdges = DragPhysics::ResizeEdge::None;
+      }
+    }
   }
 
   std::array<int, 2> View::floatingSize() const {
@@ -573,7 +585,7 @@ namespace umbriel {
 
   void View::beginFloatingResize(uint32_t edges) {
     releaseOpeningPresentation(false, true);
-    clearRegionState();
+    clearRegionState(true);
     cancelPositionAnimation();
     // The grab shows the client's frame as drawn, so a size animation in flight ends at the committed size.
     const wlr_box content = committedContentBox();
@@ -591,6 +603,15 @@ namespace umbriel {
     m_deferXwaylandConfigure = false;
     if (m_xsurface != nullptr) {
       syncXwaylandConfigure();
+    }
+  }
+
+  void View::cancelResizeGrab() {
+    if (Cursor* cursor = m_server->cursor(); cursor != nullptr && cursor->isResizingView(this)) {
+      cursor->resetMode();
+    }
+    if (m_dragPhysicsMode == DragPhysicsMode::Resize) {
+      resetDragPhysics();
     }
   }
 
@@ -638,8 +659,8 @@ namespace umbriel {
     // the request settles; that commit re-pins the edge and retires the anchor.
     const FloatingPoint anchoredOrigin =
         anchoredContentOrigin(anchor, edges, {.x = 0, .y = 0, .width = width, .height = height});
-    m_floating.beginResize(anchor, edges);
     clearRegionState();
+    m_floating.beginResize(anchor, edges);
     dropMaximizedForResize();
     requestFloatingSize(width, height);
     beginResizeAnimation(width, height);

@@ -1259,6 +1259,7 @@ namespace umbriel {
     };
     m_grabButton = button;
     view->beginFloatingResize(edges);
+    std::get<FloatingResizeGrab>(m_grab).physics = view->beginResizePhysics(edges);
     updateInteractiveCursor(view);
     return true;
   }
@@ -1418,9 +1419,13 @@ namespace umbriel {
     }
     const auto* tiledResize = std::get_if<TiledResizeGrab>(&m_grab);
     Workspace* resizedWorkspace = tiledResize != nullptr ? tiledResize->workspace : nullptr;
-    const bool restoreResizePresentation = std::holds_alternative<FloatingResizeGrab>(m_grab);
-    if (std::holds_alternative<FloatingResizeGrab>(m_grab) && view != nullptr) {
-      view->finishFloatingResize();
+    const auto* floatingResize = std::get_if<FloatingResizeGrab>(&m_grab);
+    const bool restoreResizePresentation = floatingResize != nullptr;
+    if (floatingResize != nullptr && floatingResize->view != nullptr) {
+      floatingResize->view->finishFloatingResize();
+      if (floatingResize->physics) {
+        floatingResize->view->endResizePhysics();
+      }
     }
     m_toplevelDrag = false;
     m_grab = PassthroughGrab{};

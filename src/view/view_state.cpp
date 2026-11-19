@@ -104,11 +104,16 @@ namespace umbriel {
 
   void View::setMaximized(bool maximized, bool animate) {
     if (m_tiled && m_workspace != nullptr) {
+      const int column = m_workspace->layout().columnOf(this);
+      if ((column >= 0 && m_workspace->layout().isFullWidth(column) != maximized)
+          || scheduledMaximized() != maximized
+          || m_maximizedToEdges) {
+        cancelResizeGrab();
+      }
       m_floatingMaximized = false;
       if (m_maximizedToEdges) {
         setMaximizedToEdges(false);
       }
-      const int column = m_workspace->layout().columnOf(this);
       if (column >= 0 && m_workspace->layout().isFullWidth(column) != maximized) {
         m_workspace->layout().toggleFullWidth(column);
       }
@@ -119,6 +124,9 @@ namespace umbriel {
       return;
     }
 
+    if (maximized || m_floatingMaximized || scheduledMaximized()) {
+      cancelResizeGrab();
+    }
     // Record the target before cancelSizeAnimation synchronizes the current presentation back through the workspace.
     m_floatingMaximized = maximized;
     m_remaximizeOnTile = maximized;
@@ -183,7 +191,7 @@ namespace umbriel {
     if (m_tiled || !m_mapped || !m_floatingMaximized || m_workspace == nullptr || scheduledFullscreen()) {
       return;
     }
-    if (m_server->cursor()->isDraggingView(this)) {
+    if (sizeGrabActive()) {
       return;
     }
     const wlr_box box = floatingMaximizedBox(floatingUsableArea());
@@ -358,6 +366,7 @@ namespace umbriel {
     if (!roleInitialized() || maximized == m_maximizedToEdges) {
       return;
     }
+    cancelResizeGrab();
     const bool leavingFullscreen = maximized && scheduledFullscreen();
     if (leavingFullscreen) {
       setFullscreen(false, FullscreenExitLayout::DeferToCaller);
@@ -646,6 +655,7 @@ namespace umbriel {
         || pinned == m_pinned) {
       return;
     }
+    cancelResizeGrab();
     if (pinned) {
       m_restoreTiledAfterUnpin = m_tiled;
       if (m_tiled) {
@@ -745,6 +755,7 @@ namespace umbriel {
     if (m_tiled == wantTiled) {
       return;
     }
+    cancelResizeGrab();
     // A window shows before it joins the layout, which cannot hold a hidden tile.
     if (!floating && m_minimized) {
       setMinimized(false);
@@ -968,6 +979,9 @@ namespace umbriel {
 
   void View::setFullscreen(bool fullscreen, FullscreenExitLayout exitLayout) {
     assert(!attached());
+    if (fullscreen || scheduledFullscreen() || currentFullscreen()) {
+      cancelResizeGrab();
+    }
     m_deferredUnfullscreen.clear();
     const bool refreshHoverFocus = !fullscreen
         && m_mapped

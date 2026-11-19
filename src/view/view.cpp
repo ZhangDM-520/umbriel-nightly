@@ -414,6 +414,7 @@ namespace umbriel {
     if (m_workspace == workspace) {
       return;
     }
+    cancelResizeGrab();
     if (workspace == nullptr || workspace->layoutMode() != LayoutMode::Stacking) {
       clearRegionState();
     }
@@ -624,6 +625,9 @@ namespace umbriel {
       return;
     }
     m_onActiveWorkspace = active;
+    if (!active) {
+      cancelResizeGrab();
+    }
     // A hidden tab or a minimized window stays hidden when its workspace comes back.
     const bool shown = active && !m_tabHidden && !m_minimized;
     if (m_sceneTree != nullptr) {
