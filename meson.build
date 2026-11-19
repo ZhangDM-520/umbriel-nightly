@@ -762,6 +762,7 @@ pure_sources = files(
   'src/view/window_region.cpp',
   'src/view/drag_physics.cpp',
   'src/view/popup_constraint.cpp',
+  'src/view/resize_lag.cpp',
   'src/xwayland/xsettings.cpp',
 )
 
@@ -869,6 +870,7 @@ core_sources = files(
   'src/view/view_attachment.cpp',
   'src/view/view_chrome.cpp',
   'src/view/view_floating.cpp',
+  'src/view/resize_trace.cpp',
   'src/view/view_region.cpp',
   'src/view/view_lifecycle.cpp',
   'src/view/view_rules.cpp',

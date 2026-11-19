@@ -1078,6 +1078,9 @@ namespace umbriel {
       wlr_output_layout_get_box(m_group->server()->outputLayout(), output->wlr(), &usable);
     }
     if (usable.width <= 0 || usable.height <= 0) {
+      if (Cursor* cursor = m_group->server()->cursor()) {
+        cursor->clearPendingTiledTrace(this);
+      }
       return;
     }
     if (m_scratchpad) {
@@ -1147,6 +1150,9 @@ namespace umbriel {
       for (const ResizeRequest& request : resizeRequests) {
         request.view->requestTiledSize(request.width, request.height);
       }
+      if (Cursor* cursor = m_group->server()->cursor()) {
+        cursor->clearPendingTiledTrace(this);
+      }
       return;
     }
 
@@ -1159,6 +1165,9 @@ namespace umbriel {
     }
     if (overviewActive) {
       overview->onWorkspaceArranged(this);
+    }
+    if (Cursor* cursor = m_group->server()->cursor()) {
+      cursor->traceTiledResizeStep(this);
     }
   }
 
