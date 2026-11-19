@@ -14,6 +14,7 @@
 #include "scene/surface_blur.h"
 #include "server/ipc.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/view.h"
 extern "C" {
 #include <umbrielfx/render/effect.h>
@@ -1068,6 +1069,7 @@ namespace umbriel {
         m_savedScrollingExtent = rule.defaultScrollingExtent;
       }
     }
+    const bool hadResizeRequest = m_floatingSizeConfigure.has_value() || m_tiledSizeRequest.has_value();
     commitFloatingSize();
     (void)settleTiledSizeRequest();
     if (m_mapped && m_workspace != nullptr) {
@@ -1123,6 +1125,10 @@ namespace umbriel {
       if (m_mapped) {
         m_server->scheduleIpcWindowsEvent();
       }
+    }
+    // The tick a resize waits for: the client has answered a configure with a buffer of a new size.
+    if (m_mapped && (hadResizeRequest || m_floatingSizeConfigure || m_tiledSizeRequest)) {
+      resizeTrace::commit(*this);
     }
     if (Ipc* ipc = m_server->ipc()) {
       ipc->notifyWindowCommitted();
