@@ -1324,7 +1324,9 @@ namespace umbriel {
     return true;
   }
 
-  bool ScratchpadManager::restoreView(View* view, Output* fallback, bool focus, Workspace* target) {
+  bool ScratchpadManager::restoreView(
+      View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition
+  ) {
     const auto iterator =
         std::ranges::find_if(m_entries, [view](const Entry& candidate) { return candidate.view == view; });
     if (iterator == m_entries.end()) {
@@ -1452,6 +1454,14 @@ namespace umbriel {
     if (scratchpad != nullptr && (wasSolo || !hasEntries(entry.scratchpad)) && scratchpad->visible) {
       setVisible(entry.scratchpad, false);
     }
+    // The window returns the way the pad removed it: a fade-out hides it, so an interactive restore fades it back in
+    // over the same curve. An automatic restore or a move to an inactive workspace snaps instead, since nothing of it
+    // is on screen, and a member a hidden pad left transparent must not stay that way on its workspace.
+    if (transition == RestoreTransition::Animated) {
+      finishRestoreTransition(view);
+    } else if (transition == RestoreTransition::Snap) {
+      view->cancelFadeAnimation();
+    }
     if (scratchpadOutput != nullptr) {
       scratchpadOutput->updateVrr();
       scratchpadOutput->updateHdr();
@@ -1462,17 +1472,40 @@ namespace umbriel {
     return true;
   }
 
+  void ScratchpadManager::finishRestoreTransition(View* view) const {
+    if (view == nullptr) {
+      return;
+    }
+    const auto& animation = config().animation;
+    const bool animateRestore = view->workspace() != nullptr
+        && view->mapped()
+        && view->onActiveWorkspace()
+        && !view->tabHidden()
+        && !view->minimized()
+        && !overviewOpen(*m_server)
+        && animation.enabled
+        && animation.scratchpad.enabled;
+    if (animateRestore) {
+      view->beginScratchpadRestoreFade(animation.scratchpad.durationMs, animation.scratchpad.curve);
+    } else {
+      view->cancelFadeAnimation();
+    }
+  }
+
   bool ScratchpadManager::restoreFocused(std::string_view name) {
     View* view = focused(name);
     if (view == nullptr) {
       return false;
     }
     const Scratchpad* scratchpad = findScratchpad(name);
-    return restoreView(view, scratchpad != nullptr ? scratchpad->output : nullptr, true);
+    return restoreView(
+        view, scratchpad != nullptr ? scratchpad->output : nullptr, true, nullptr, RestoreTransition::Animated
+    );
   }
 
-  bool ScratchpadManager::restoreToWorkspace(View* view, Workspace* workspace) {
-    return workspace != nullptr && restoreView(view, outputFor(view), false, workspace);
+  bool ScratchpadManager::restoreToWorkspace(View* view, Workspace* workspace, bool deferTransition) {
+    const RestoreTransition transition = deferTransition ? RestoreTransition::Deferred : RestoreTransition::Animated;
+    return workspace != nullptr && restoreView(view, outputFor(view), false, workspace, transition);
   }
 
   void ScratchpadManager::remove(View* view) {
@@ -1582,7 +1615,7 @@ namespace umbriel {
         }
       }
       for (View* view : views) {
-        refocusNeeded = restoreView(view, fallback, false) || refocusNeeded;
+        refocusNeeded = restoreView(view, fallback, false, nullptr, RestoreTransition::Snap) || refocusNeeded;
       }
       m_scratchpads.erase(name);
     }
