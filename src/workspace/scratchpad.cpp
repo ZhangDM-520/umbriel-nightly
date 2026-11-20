@@ -170,6 +170,15 @@ namespace umbriel {
     });
   }
 
+  std::string_view ScratchpadManager::visibleNameOn(const Output* output) const {
+    for (const auto& [name, scratchpad] : m_scratchpads) {
+      if (scratchpad.visible && scratchpad.output == output) {
+        return name;
+      }
+    }
+    return {};
+  }
+
   bool ScratchpadManager::presents(const Scratchpad& scratchpad, const View* view) {
     if (!scratchpad.visible || scratchpad.output == nullptr) {
       return false;
@@ -345,6 +354,33 @@ namespace umbriel {
 
   bool ScratchpadManager::moveToScratchpad(View* view, std::string_view name, Output* invokingOutput) {
     return admit(view, name, invokingOutput, Admission::Interactive, {});
+  }
+
+  bool ScratchpadManager::dropInto(View* view, Output* output, Workspace* sourceWorkspace, int dropX, int dropY) {
+    const std::string_view name = visibleNameOn(output);
+    if (view == nullptr || name.empty()) {
+      return false;
+    }
+    // The drop point has to become the layout target, or the window snaps back to where the drag picked it up. A
+    // refused admission restores the position it had before the drop.
+    const int previousX = view->layoutX();
+    const int previousY = view->layoutY();
+    view->setPosition(dropX, dropY);
+    // The pad remembers where the window came from, so restoring it returns to the workspace the drag started on.
+    const AutomaticAdmission options{
+        .restoreWorkspace = sourceWorkspace,
+        .focusOrigin = output,
+        .restoreTiled = std::nullopt,
+        .updateRestoreLocation = false,
+    };
+    if (!admit(view, name, output, Admission::Interactive, options)) {
+      view->setPosition(previousX, previousY);
+      return false;
+    }
+    // Admission floats a detached tile from the layout slot it left, and re-centres a member whose box left the
+    // usable area; either way the release point is where the user put it.
+    view->setPosition(dropX, dropY);
+    return true;
   }
 
   bool ScratchpadManager::assignAutomatic(
