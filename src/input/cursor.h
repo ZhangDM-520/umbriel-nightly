@@ -184,6 +184,8 @@ namespace umbriel {
     // A tiled resize updates every view in its workspace without size
     // animations trailing the pointer.
     bool isResizingWorkspace(const Workspace* workspace) const;
+    // Whether a tiled resize grab still owns a window the layout can resize.
+    [[nodiscard]] bool tiledResizeTargetValid(const TiledResizeGrab& grab) const;
 
     void attachInputDevice(wlr_input_device* device);
     void applyConfig();
