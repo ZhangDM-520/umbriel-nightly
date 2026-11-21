@@ -179,6 +179,11 @@ namespace umbriel {
     return {};
   }
 
+  bool ScratchpadManager::isCarried(const View* view) const {
+    const Cursor* cursor = m_server != nullptr ? m_server->cursor() : nullptr;
+    return cursor != nullptr && cursor->isDraggingView(view);
+  }
+
   bool ScratchpadManager::presents(const Scratchpad& scratchpad, const View* view) {
     if (!scratchpad.visible || scratchpad.output == nullptr) {
       return false;
@@ -373,7 +378,7 @@ namespace umbriel {
         .restoreTiled = std::nullopt,
         .updateRestoreLocation = false,
     };
-    if (!admit(view, name, output, Admission::Interactive, options)) {
+    if (!admit(view, name, output, Admission::Drop, options)) {
       view->setPosition(previousX, previousY);
       return false;
     }
@@ -381,6 +386,25 @@ namespace umbriel {
     // usable area; either way the release point is where the user put it.
     view->setPosition(dropX, dropY);
     return true;
+  }
+
+  bool ScratchpadManager::memberOfHiddenPad(const View* view) const {
+    const Entry* entry = findEntry(view);
+    const Scratchpad* scratchpad = entry != nullptr ? findScratchpad(entry->scratchpad) : nullptr;
+    return scratchpad != nullptr && !scratchpad->visible;
+  }
+
+  void ScratchpadManager::dropOut(View* view, Output* output) {
+    if (view == nullptr || output == nullptr || output->workspaceGroup() == nullptr || findEntry(view) == nullptr) {
+      return;
+    }
+    Workspace* target = output->workspaceGroup()->active();
+    if (target == nullptr) {
+      return;
+    }
+    // The saved location decides only tiled versus floating; the drop that follows places the window, so nothing
+    // fades and no position is applied here.
+    (void)restoreView(view, output, false, target, RestoreTransition::Snap, /*allowCarried=*/true);
   }
 
   bool ScratchpadManager::assignAutomatic(
@@ -416,6 +440,11 @@ namespace umbriel {
       return false;
     }
     if (view == nullptr || !view->mapped()) {
+      return false;
+    }
+    // A window the pointer is carrying belongs to the drag until the button is released, so no other admission path may
+    // take it. The release itself admits through `Admission::Drop`.
+    if (admission != Admission::Drop && isCarried(view)) {
       return false;
     }
 
@@ -547,9 +576,9 @@ namespace umbriel {
     view->setInScratchpad(true);
     scratchpad->pendingSpawn.reset();
     const bool visible = scratchpad->visible;
-    // A pad showing one window shows a window the user moves in, in place of the others; a dialog brings the member it
-    // belongs to. A dialog that joins with its parent automatically shows alongside it instead.
-    if (scratchpad->solo != nullptr && admission == Admission::Interactive) {
+    // A pad showing one window shows a window the user moves in or drops on it, in place of the others; a dialog
+    // brings the member it belongs to. A dialog that joins with its parent automatically shows alongside it instead.
+    if (scratchpad->solo != nullptr && admission != Admission::Automatic) {
       scratchpad->solo = memberFor(view, name);
     }
     setVisible(name, visible, admission == Admission::Interactive);
@@ -612,6 +641,11 @@ namespace umbriel {
         continue;
       }
       View* view = entry.view;
+      // The pointer owns a carried window's frame, workspace and node state until it is released; the release
+      // re-applies whatever this pad did meanwhile.
+      if (isCarried(view)) {
+        continue;
+      }
       if (presents(*state, view)) {
         view->setOnActiveWorkspace(true);
         view->enterForeignOutput(output);
@@ -714,6 +748,10 @@ namespace umbriel {
         continue;
       }
       View* view = entry.view;
+      // A carried window is not moved by its pad changing output, unless this is the release placing it there.
+      if (view != alreadyPositioned && isCarried(view)) {
+        continue;
+      }
       if (clearDisplacement) {
         entry.displacedPosition.reset();
       }
@@ -851,7 +889,6 @@ namespace umbriel {
 
     bool geometryChanged = false;
     bool movedEntry = false;
-    Cursor* cursor = m_server->cursor();
     for (auto& [name, scratchpad] : m_scratchpads) {
       if (scratchpad.output != output) {
         continue;
@@ -871,9 +908,7 @@ namespace umbriel {
       geometryChanged = true;
 
       for (Entry& entry : m_entries) {
-        if (entry.scratchpad != name
-            || entry.view == nullptr
-            || (cursor != nullptr && cursor->isDraggingView(entry.view))) {
+        if (entry.scratchpad != name || entry.view == nullptr || isCarried(entry.view)) {
           continue;
         }
         View* view = entry.view;
@@ -1361,8 +1396,12 @@ namespace umbriel {
   }
 
   bool ScratchpadManager::restoreView(
-      View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition
+      View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition, bool allowCarried
   ) {
+    // A window the pointer is carrying leaves its pad only by being released, where the drop asks for it.
+    if (!allowCarried && isCarried(view)) {
+      return false;
+    }
     const auto iterator =
         std::ranges::find_if(m_entries, [view](const Entry& candidate) { return candidate.view == view; });
     if (iterator == m_entries.end()) {
@@ -1643,10 +1682,8 @@ namespace umbriel {
           views.push_back(entry.view);
         }
       }
-      if (Cursor* cursor = m_server->cursor(); cursor != nullptr) {
-        const bool removesGrabbedView =
-            std::ranges::any_of(views, [&](const View* view) { return cursor->isDraggingView(view); });
-        if (removesGrabbedView) {
+      if (std::ranges::any_of(views, [&](const View* view) { return isCarried(view); })) {
+        if (Cursor* cursor = m_server->cursor()) {
           cursor->resetMode();
         }
       }

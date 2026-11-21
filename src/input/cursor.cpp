@@ -1095,6 +1095,16 @@ namespace umbriel {
     return workspace != nullptr && grab != nullptr && grab->workspace == workspace;
   }
 
+  bool Cursor::tiledResizeTargetValid(const TiledResizeGrab& grab) const {
+    return grab.workspace != nullptr
+        && grab.view != nullptr
+        && grab.session != nullptr
+        && grab.view->tiled()
+        && grab.view->workspace() == grab.workspace
+        && !grab.view->scheduledFullscreen()
+        && !grab.view->currentFullscreen();
+  }
+
   bool Cursor::beginMove(View* view, uint32_t button, bool deferUntilThreshold) {
     if (view == nullptr || !view->mapped() || button == 0) {
       return false;
@@ -1478,9 +1488,7 @@ namespace umbriel {
     }
     const auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
     if (grab != nullptr
-        && (grab->workspace == nullptr
-            || grab->session == nullptr
-            || grab->session->ownerLayout() != &grab->workspace->layout())) {
+        && (!tiledResizeTargetValid(*grab) || grab->session->ownerLayout() != &grab->workspace->layout())) {
       resetMode();
     }
   }
@@ -3305,6 +3313,13 @@ namespace umbriel {
       m_server->focusView(view, FocusReason::DragDrop);
       return;
     }
+    // A member released while its pad is hidden leaves the pad with the pointer: the pad was closed under the drag, and
+    // the window must land where it was released rather than vanish with the pad. A visible pad follows the window
+    // instead, wherever it was dropped. The drop below places the window either way.
+    if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
+        scratchpad != nullptr && destination != nullptr && scratchpad->memberOfHiddenPad(view)) {
+      scratchpad->dropOut(view, destination);
+    }
     if (grab->target == DragTarget::Tiled && workspace != nullptr && workspace->layoutMode() == LayoutMode::Stacking) {
       view->floatForStackingLayout();
     } else {
@@ -3910,11 +3925,9 @@ namespace umbriel {
   void Cursor::processResizeTile() {
     auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
     if (grab == nullptr
-        || grab->workspace == nullptr
+        || !tiledResizeTargetValid(*grab)
         || grab->workspace->group() == nullptr
-        || grab->workspace->group()->output() == nullptr
-        || grab->view == nullptr
-        || grab->session == nullptr) {
+        || grab->workspace->group()->output() == nullptr) {
       resetMode();
       return;
     }
