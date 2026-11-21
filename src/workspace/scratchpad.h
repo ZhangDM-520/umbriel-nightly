@@ -68,6 +68,12 @@ namespace umbriel {
     // `sourceWorkspace` as where a restore returns it. False when no pad is visible on that output, or the pad refuses
     // the window.
     [[nodiscard]] bool dropInto(View* view, Output* output, Workspace* sourceWorkspace, int dropX, int dropY);
+    // Take a member the pointer released back out of its pad, onto the active workspace of `output`. The release calls
+    // this only for a hidden pad, so the window does not vanish with the pad.
+    void dropOut(View* view, Output* output);
+    // Whether `view` is a member of a pad that is not showing. A visible pad follows a released member to the output
+    // it was dropped on, so only a hidden pad lets the window go.
+    [[nodiscard]] bool memberOfHiddenPad(const View* view) const;
     [[nodiscard]] bool
     assignAutomatic(View* view, std::string_view name, Output* placementOutput, const AutomaticAdmission& options);
     [[nodiscard]] bool assignFromParent(View* view, const View* parent, const AutomaticAdmission& options);
@@ -203,7 +209,10 @@ namespace umbriel {
     // nearest window of the scratchpad it was opened from, and any other window clears it and leaves cycle() to resume
     // at the member after it.
     void forgetLastFocused(Scratchpad& scratchpad, std::string_view name, const View* view) const;
-    enum class Admission { Interactive, Automatic };
+    // `Drop` is the pointer releasing a window: the one admission that applies to the view the grab is carrying.
+    enum class Admission { Interactive, Automatic, Drop };
+    // Whether the pointer is carrying `view`, which keeps it out of every pad until the button is released.
+    bool isCarried(const View* view) const;
     // Whether a window leaving the pad dissolves in on its workspace, or lands fully visible because nothing of it is
     // on screen.
     enum class RestoreTransition { Snap, Animated, Deferred };
@@ -222,7 +231,10 @@ namespace umbriel {
         View* view, const wlr_box& previousArea, const wlr_box& targetArea, bool proportionalSize,
         bool reposition = true
     );
-    bool restoreView(View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition);
+    bool restoreView(
+        View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition,
+        bool allowCarried = false
+    );
     // The modal pad with the greatest fade on `output`: it owns the output's dim and blur, whose shader binds to its
     // fade. Null when no modal pad is there.
     const Scratchpad* backdropOwner(const Output* output) const;
