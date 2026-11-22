@@ -90,6 +90,12 @@ namespace umbriel {
       int geometryWidth = 0;
       int geometryHeight = 0;
       uint32_t edges = 0;
+      // The newest box this grab's pointer implies, applied once per frame: the configure goes out on the motion
+      // event, but the scene layout does not run at pointer rate.
+      wlr_box pending{};
+      double pendingX = 0;
+      double pendingY = 0;
+      bool pendingValid = false;
     };
     struct TiledResizeGrab {
       View* view = nullptr;
@@ -186,6 +192,8 @@ namespace umbriel {
     // A tiled resize updates every view in its workspace without size
     // animations trailing the pointer.
     bool isResizingWorkspace(const Workspace* workspace) const;
+    // Applies the newest floating resize box the pointer implied, once, from the frame path.
+    void flushResizeTarget();
     // Logs the tiled resize step once Workspace::arrange() has updated presented boxes.
     void traceTiledResizeStep(const Workspace* workspace);
     // Clears any pending tiled trace step when a workspace arrange returns early without presenting.

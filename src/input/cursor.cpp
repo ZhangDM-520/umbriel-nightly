@@ -1419,6 +1419,9 @@ namespace umbriel {
     Workspace* resizedWorkspace = tiledResize != nullptr ? tiledResize->workspace : nullptr;
     const bool restoreResizePresentation = std::holds_alternative<FloatingResizeGrab>(m_grab);
     if (std::holds_alternative<FloatingResizeGrab>(m_grab) && view != nullptr) {
+      // A release can land before the frame that would have applied the last motion, so apply it here: the box the
+      // user dragged to is the box the window must settle from.
+      flushResizeTarget();
       view->finishFloatingResize();
     }
     m_toplevelDrag = false;
@@ -3523,11 +3526,32 @@ namespace umbriel {
       }
     }
 
-    // The drawn box tracks the pointer immediately while client frames scale into it, so record the trace after
-    // applying the box.
+    // The configure goes out now, so the client's latency is unchanged. The scene catches up in flushResizeTarget,
+    // once for however many events this frame carried: the presentation is a layout pipeline, and a 200 Hz pointer
+    // would otherwise run it 200 times a second.
     const wlr_box target{newLeft, newTop, newRight - newLeft, newBottom - newTop};
-    grab->view->resizeFloating(target);
-    resizeTrace::step("floating", grab->edges, m_cursor->x, m_cursor->y, grab->view->presentedBox(), target);
+    grab->pending = target;
+    grab->pendingX = m_cursor->x;
+    grab->pendingY = m_cursor->y;
+    grab->pendingValid = true;
+    grab->view->requestFloatingResize(target);
+    grab->view->scheduleFrame();
+  }
+
+  void Cursor::flushResizeTarget() {
+    auto* grab = std::get_if<FloatingResizeGrab>(&m_grab);
+    if (grab == nullptr || !grab->pendingValid) {
+      return;
+    }
+    grab->pendingValid = false;
+    if (grab->view == nullptr || !grab->view->mapped()) {
+      return;
+    }
+    grab->view->applyFloatingResize(grab->pending);
+    // Recorded after applying, like the tiled step, so the trace reads the drawn box the frame will show.
+    resizeTrace::step(
+        "floating", grab->edges, grab->pendingX, grab->pendingY, grab->view->presentedBox(), grab->pending
+    );
   }
 
   void Cursor::revealClickedTile(View* view) {
