@@ -52,7 +52,9 @@ namespace umbriel {
     std::vector<Workspace*> workspaces() const;
     // Re-resolve each scratchpad workspace's layout from [layout] and its [[scratchpad]] `layout` keys.
     void refreshLayouts();
-    struct AutomaticAdmission {
+    // Where an admitted window returns to once it leaves the pad. A drop passes the workspace the drag started on; a
+    // rule or launch admission passes the placement it would have had.
+    struct AdmissionOptions {
       Output* restoreOutput = nullptr;
       Workspace* restoreWorkspace = nullptr;
       Output* focusOrigin = nullptr;
@@ -75,8 +77,8 @@ namespace umbriel {
     // it was dropped on, so only a hidden pad lets the window go.
     [[nodiscard]] bool memberOfHiddenPad(const View* view) const;
     [[nodiscard]] bool
-    assignAutomatic(View* view, std::string_view name, Output* placementOutput, const AutomaticAdmission& options);
-    [[nodiscard]] bool assignFromParent(View* view, const View* parent, const AutomaticAdmission& options);
+    assignAutomatic(View* view, std::string_view name, Output* placementOutput, const AdmissionOptions& options);
+    [[nodiscard]] bool assignFromParent(View* view, const View* parent, const AdmissionOptions& options);
     // Launch context survives an empty pad. Explicit workspace focus relinquishes it on that output.
     std::string_view activeOn(const Output* output) const;
     void deactivateOn(const Output* output);
@@ -118,6 +120,9 @@ namespace umbriel {
     View* focusedOn(const Output* output) const;
     void noteFocus(View* view);
     void finishMove(View* view, Output* output);
+    // Apply the pad's current presentation to one member, for a window a drag kept out of reach of the pad's own
+    // show and hide.
+    void refreshPresentation(View& view);
     void remove(View* view);
     void moveOutput(Output* from, Output* to);
     void releaseOutput(Output* output);
@@ -217,8 +222,7 @@ namespace umbriel {
     // on screen.
     enum class RestoreTransition { Snap, Animated, Deferred };
     bool admit(
-        View* view, std::string_view name, Output* invokingOutput, Admission admission,
-        const AutomaticAdmission& options
+        View* view, std::string_view name, Output* invokingOutput, Admission admission, const AdmissionOptions& options
     );
     // Create, move, or drop the scratchpad's workspace so it follows the pad's output.
     void syncWorkspace(std::string_view name, Scratchpad& scratchpad);

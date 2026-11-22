@@ -266,4 +266,23 @@ await_window_closed drag-into-pad-tab-a
 await_window_closed drag-into-pad-tab-b
 settle_motion
 
+# A pad that is still showing keeps its own output: a window moved into it from the other output joins the pad there.
+readonly POINTER="${UMBRIEL_POINTER_CLIENT:-./build-debug/tests/pointer-client}"
+"$POINTER" $LAYOUT_W $LAYOUT_H move 1920 360
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
+settle_motion
+if (( $(corner right 1300) >= 200 )); then
+  echo "the pad did not open on the right output: corner=$(corner right 1300)"
+  exit 1
+fi
+"$POINTER" $LAYOUT_W $LAYOUT_H move 640 360
+spawn_window drag-into-pad-moved
+"$UMBRIEL" msg window-focus "$(field drag-into-pad-moved id)" > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad > /dev/null
+"$UMBRIEL" settle
+if [[ $(field drag-into-pad-moved scratchpad) != default || $(field drag-into-pad-moved output) != HEADLESS-1 ]]; then
+  echo "a window moved into a pad shown on another output did not join it there: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+
 echo "drops over an open pad joined it (float $float_green, cross-output $tile_green), declined a pin drag ($declined_green) and a tab group onto the workspace, and dismissing the pad never moved a member"

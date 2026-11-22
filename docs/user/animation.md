@@ -104,7 +104,7 @@ When a tiled window closes while `windows_out` is disabled, its last frame stays
 
 Scratchpad `dim` and `blur` remain active without a fade when animation is disabled. `dim` is the opacity of the black layer over the output behind a visible scratchpad; `blur` blurs it when `[appearance.blur]` is enabled.
 
-A window leaving a scratchpad for a workspace fades in there over the same curve that hid it, starting transparent even when the pad was on screen. A move to a workspace that is not active, and a restore that an output loss or a removed `[[scratchpad]]` performs, show the window at full opacity instead.
+A window leaving a scratchpad for a workspace fades in there over the same curve that hid it, starting transparent even when the pad was on screen. A silent move to a workspace that is not active, and a restore that an output loss or a removed `[[scratchpad]]` performs, show the window at full opacity instead.
 
 Dialogs `dim` works the same way: it is the opacity, 0.0 to 1.0 and `0.3` by default, of the black shade over a window while a modal dialog is attached to it (see [Dialogs](window-states.md#dialogs)). The shade fades in when the dialog attaches and out when it leaves, and stays without a fade when animation is disabled.
 

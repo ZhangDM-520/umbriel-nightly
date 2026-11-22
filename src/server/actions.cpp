@@ -159,6 +159,9 @@ namespace umbriel {
       case KeybindAction::WindowMoveToScratchpad:
       case KeybindAction::WindowRestoreFromScratchpad:
       case KeybindAction::WindowToggleScratchpad:
+      case KeybindAction::WindowSetRegion:
+      case KeybindAction::WindowClearRegion:
+      case KeybindAction::LayoutToggleSplit:
         return true;
       default:
         return false;

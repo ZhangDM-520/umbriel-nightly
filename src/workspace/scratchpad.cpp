@@ -437,7 +437,7 @@ namespace umbriel {
     const int previousY = view->layoutY();
     view->setPosition(dropX, dropY);
     // The pad remembers where the window came from, so restoring it returns to the workspace the drag started on.
-    const AutomaticAdmission options{
+    const AdmissionOptions options{
         .restoreWorkspace = sourceWorkspace,
         .focusOrigin = output,
         .restoreTiled = std::nullopt,
@@ -473,12 +473,12 @@ namespace umbriel {
   }
 
   bool ScratchpadManager::assignAutomatic(
-      View* view, std::string_view name, Output* placementOutput, const AutomaticAdmission& options
+      View* view, std::string_view name, Output* placementOutput, const AdmissionOptions& options
   ) {
     return admit(view, name, placementOutput, Admission::Automatic, options);
   }
 
-  bool ScratchpadManager::assignFromParent(View* view, const View* parent, const AutomaticAdmission& options) {
+  bool ScratchpadManager::assignFromParent(View* view, const View* parent, const AdmissionOptions& options) {
     const Entry* parentEntry = findEntry(parent);
     const Scratchpad* scratchpad = parentEntry != nullptr ? findScratchpad(parentEntry->scratchpad) : nullptr;
     if (view == nullptr
@@ -497,7 +497,7 @@ namespace umbriel {
   }
 
   bool ScratchpadManager::admit(
-      View* view, std::string_view name, Output* invokingOutput, Admission admission, const AutomaticAdmission& options
+      View* view, std::string_view name, Output* invokingOutput, Admission admission, const AdmissionOptions& options
   ) {
     assert(!view->attached());
     Scratchpad* scratchpad = findScratchpad(name);
@@ -1346,6 +1346,23 @@ namespace umbriel {
       moveScratchpad(name, output, view);
     }
     view->restoreHomePresentation();
+  }
+
+  void ScratchpadManager::refreshPresentation(View& view) {
+    const Entry* entry = findEntry(&view);
+    const Scratchpad* scratchpad = entry != nullptr ? findScratchpad(entry->scratchpad) : nullptr;
+    if (scratchpad == nullptr) {
+      return;
+    }
+    const bool presented = presents(*scratchpad, &view);
+    std::erase(m_hidingViews, &view);
+    // The pad may also have changed output while the drag kept this view out of moveScratchpad, so its foreign-toplevel
+    // output follows the pad rather than staying where the drag began.
+    view.enterForeignOutput(scratchpad->output);
+    view.setOnActiveWorkspace(presented);
+    view.setNodeEnabled(presented);
+    view.cancelFadeAnimation();
+    view.setFadeAlpha(presented ? 1.0F : 0.0F);
   }
 
   bool ScratchpadManager::focusNext(std::string_view name) {

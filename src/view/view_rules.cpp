@@ -507,7 +507,7 @@ namespace umbriel {
         const bool wasActivated = m_activated;
         assignedScratchpad = scratchpadManager->assignAutomatic(
             this, *scratchpadTarget, targetOutput,
-            ScratchpadManager::AutomaticAdmission{
+            ScratchpadManager::AdmissionOptions{
                 .restoreOutput = targetOutput,
                 .restoreWorkspace = targetWorkspace,
                 .focusOrigin = currentOutput(),
