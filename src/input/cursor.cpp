@@ -1437,6 +1437,11 @@ namespace umbriel {
     m_grabButton = 0;
     if (restoreDragPresentation && view != nullptr) {
       view->restoreHomePresentation();
+      // A pad action that ran during the drag skipped this window because the pointer carried it. The pad applies its
+      // own presentation again now that the pointer has let go, whichever way the action went.
+      if (ScratchpadManager* scratchpad = m_server->scratchpadManager()) {
+        scratchpad->refreshPresentation(*view);
+      }
       // A drag abandoned outside its drop path (session lock mid-drag, the
       // toplevel-drag detach endings) never runs finishFloatMove. Settle here
       // exactly like a drop: nothing else re-clamps where the drag parked the
@@ -3291,11 +3296,13 @@ namespace umbriel {
     Output* destination =
         m_server->outputFromWlr(wlr_output_layout_output_at(m_server->outputLayout(), m_cursor->x, m_cursor->y));
     Workspace* workspace = dropWorkspace(*m_server, *view, destination);
-    // A pad showing on the drop output takes the window instead of the workspace underneath it. A lifted tab group
-    // would have to split its tabs and a pin gesture asked for pinning, so both keep the workspace drop.
+    // A pad showing on the drop output takes the window instead of the workspace underneath it. A member of a hidden
+    // pad has already left its pad with the pointer, so the visible pad adopts it; a member of a pad that is still
+    // showing roams with it instead. A lifted tab group would have to split its tabs and a pin gesture asked for
+    // pinning, so both keep the workspace drop.
     if (ScratchpadManager* scratchpad = m_server->scratchpadManager(); scratchpad != nullptr
         && destination != nullptr
-        && !scratchpad->contains(view)
+        && (!scratchpad->contains(view) || scratchpad->memberOfHiddenPad(view))
         && grab->tabGroup.tabs.empty()
         && grab->target != DragTarget::Pinned
         && scratchpad->dropInto(view, destination, grab->sourceWorkspace, dropX, dropY)) {
@@ -3309,6 +3316,12 @@ namespace umbriel {
     if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
         scratchpad != nullptr && destination != nullptr && scratchpad->memberOfHiddenPad(view)) {
       scratchpad->dropOut(view, destination);
+      // The window left its pad, so the drop now belongs to the workspace under the pointer: the grab still aims at
+      // the closed pad's layout, where the window is no longer a member. Recomputing may find no target at all, such
+      // as under a panel, so the workspace is set before the refinement rather than only by it.
+      workspace = dropWorkspace(*m_server, *view, destination);
+      grab->drop = DropTarget{.workspace = workspace};
+      updateDropTarget();
     }
     if (grab->target == DragTarget::Tiled && workspace != nullptr && workspace->layoutMode() == LayoutMode::Stacking) {
       view->floatForStackingLayout();

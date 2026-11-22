@@ -12,6 +12,9 @@ readonly BTN_LEFT=272
 readonly MEMBER=drag-actions-member
 readonly TILE=drag-actions-tile
 readonly SOLO=drag-actions-solo
+readonly PAD_TILE_A=drag-actions-pad-tile-a
+readonly PAD_TILE_B=drag-actions-pad-tile-b
+readonly ONTO_TILE=drag-actions-onto-tile
 readonly CLOSE_REASON="error: the window is being dragged"
 
 cat >> "$UMBRIEL_CONFIG" <<'EOF'
@@ -36,6 +39,14 @@ name = "pad"
 
 [[scratchpad]]
 name = "other"
+
+[[scratchpad]]
+name = "tiles"
+layout.mode = "dwindle"
+
+[[window_rule]]
+match.title = "^drag-actions-pad-tile-"
+default_scratchpad = "tiles"
 EOF
 "$UMBRIEL" msg config-reload > /dev/null
 
@@ -76,6 +87,21 @@ spawn_window() {
   SPAWNED_PID=$!
   await_window "$1"
   "$UMBRIEL" settle
+}
+
+# Waits for a field a drop settles without a frame of its own, then settles the compositor once the frame it needs
+# has been drawn.
+await_field() {
+  local actual=
+  for _ in $(seq 100); do
+    actual=$(field "$1" "$2")
+    [[ $actual == "$3" ]] && break
+    sleep 0.02
+  done
+  if [[ $actual != "$3" ]]; then
+    echo "$1: expected $2=$3, got '$actual': $("$UMBRIEL" windows --json)"
+    exit 1
+  fi
 }
 
 # The pad takes the pointer while it is on screen, so the drag starts first and the pad opens or closes under it.
@@ -123,7 +149,8 @@ before=$(box "$MEMBER")
 # the carried member all refuse it.
 for action in "window-restore-from-scratchpad pad" "window-toggle-scratchpad pad" "window-move-to-scratchpad pad" \
   "window-restore-from-scratchpad other" "window-toggle-scratchpad other" "window-move-to-scratchpad other" \
-  "window-move-to-workspace 2" "window-toggle-pinned" "window-toggle-maximize" "window-cycle-primary-extent"; do
+  "window-move-to-workspace 2" "window-toggle-pinned" "window-toggle-maximize" "window-cycle-primary-extent" \
+  "window-set-region left" "window-clear-region" "layout-toggle-split"; do
   refused "$action"
   require "$MEMBER" scratchpad pad
   if [[ $(box "$MEMBER") != "$before" ]]; then
@@ -231,6 +258,95 @@ if (( shown != 1 )); then
   echo "the solo pad showed $shown members after the drop: $("$UMBRIEL" windows --json)"
   exit 1
 fi
+
+# A step the pad took under the drag is re-applied at release: the member it stopped showing must not stay drawn.
+require "$SOLO" visible true
+read -r sx sy <<< "$(centre "$SOLO")"
+start_drag "$sx" "$sy" $((sx + 80)) $((sy + 60))
+"$UMBRIEL" msg scratchpad-window-show-next pad > /dev/null
+"$UMBRIEL" settle
+pointer_release
+"$UMBRIEL" settle
+shown=$("$UMBRIEL" windows --json | jq '[.[] | select(.scratchpad == "pad" and .visible)] | length')
+if (( shown != 1 )); then
+  echo "the solo pad showed $shown members after a step under the drag: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+require "$SOLO" visible false
+
+# A member of a pad closed under the drag is outside its pad, so another visible pad adopts it on release.
+"$UMBRIEL" msg scratchpad-toggle pad > /dev/null
+"$UMBRIEL" msg scratchpad-toggle pad > /dev/null
+"$UMBRIEL" settle
+require "$MEMBER" visible true
+"$UMBRIEL" msg window-focus "$(field "$MEMBER" id)" > /dev/null
+"$UMBRIEL" settle
+read -r mx my <<< "$(centre "$MEMBER")"
+start_drag "$mx" "$my" $((mx + 80)) $((my + 60))
+"$UMBRIEL" msg scratchpad-toggle pad > /dev/null
+"$UMBRIEL" msg scratchpad-toggle other > /dev/null
+"$UMBRIEL" settle
+pointer_release
+"$UMBRIEL" settle
+require "$MEMBER" scratchpad other
+require "$MEMBER" visible true
+"$UMBRIEL" msg window-restore-from-scratchpad other > /dev/null
+"$UMBRIEL" settle
+require "$MEMBER" scratchpad ""
+
+# A tiled member keeps its pad's layout, so the release that carries it out must place it on the workspace instead
+# of the closed pad's layout it was aiming at.
+spawn_window "$PAD_TILE_A"
+spawn_window "$PAD_TILE_B"
+"$UMBRIEL" msg scratchpad-toggle tiles > /dev/null
+"$UMBRIEL" settle
+require "$PAD_TILE_A" scratchpad tiles
+require "$PAD_TILE_B" scratchpad tiles
+read -r ax ay <<< "$(centre "$PAD_TILE_A")"
+start_drag "$ax" "$ay" $((ax + 80)) $((ay + 60))
+"$UMBRIEL" msg scratchpad-toggle tiles > /dev/null
+"$UMBRIEL" settle
+pointer_release
+await_field "$PAD_TILE_A" scratchpad ""
+await_field "$PAD_TILE_A" column 0
+await_field "$PAD_TILE_A" visible true
+if [[ -z $(field "$PAD_TILE_A" workspace) ]]; then
+  echo "the tiled member left its pad without a workspace: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+require "$PAD_TILE_B" scratchpad tiles
+require "$PAD_TILE_B" visible false
+
+# A pad with a layout owns the placement: the window dropped on it joins by layout order, not at the drop point.
+spawn_window "$ONTO_TILE"
+read -r ox oy <<< "$(centre "$ONTO_TILE")"
+start_drag "$ox" "$oy" $((ox + 120)) $((oy + 160))
+"$UMBRIEL" msg scratchpad-toggle tiles > /dev/null
+"$UMBRIEL" settle
+pointer_release
+"$UMBRIEL" settle
+require "$ONTO_TILE" scratchpad tiles
+require "$ONTO_TILE" floating false
+require "$ONTO_TILE" y "$(field "$PAD_TILE_B" y)"
+
+# A release over a panel draws no drop target, so the workspace the window left its pad for must still place it.
+readonly PANEL_CLIENT="${UMBRIEL_LAYER_CLIENT:-./build-debug/tests/layer-client}"
+"$PANEL_CLIENT" HEADLESS-1 40 > "$UMBRIEL_RUNTIME_DIR/panel.log" 2>&1 &
+PANEL_PID=$!
+await_lines "$UMBRIEL_RUNTIME_DIR/panel.log" ready 1
+"$UMBRIEL" settle
+read -r bx by <<< "$(centre "$PAD_TILE_B")"
+start_drag "$bx" "$by" $((bx + 120)) 20
+"$UMBRIEL" msg scratchpad-toggle tiles > /dev/null
+"$UMBRIEL" settle
+pointer_release
+await_field "$PAD_TILE_B" scratchpad ""
+await_field "$PAD_TILE_B" visible true
+if [[ -z $(field "$PAD_TILE_B" workspace) ]]; then
+  echo "the tiled member released over a panel left without a workspace: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+kill "$PANEL_PID" 2>/dev/null || true
 
 echo "a dragged window refused the scratchpad window actions, stayed put until release, and the pad's own close and"
 echo "open decided its membership symmetrically; a dropped window became the one its solo pad shows"
