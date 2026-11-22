@@ -579,20 +579,26 @@ namespace umbriel {
     const int height = m_presentation.height() > 0 ? m_presentation.height() : content.height;
     const wlr_box box{layoutX(), layoutY(), width, height};
     m_floating.beginResize(box, edges);
-    resizeFloating(box);
+    requestFloatingResize(box);
+    applyFloatingResize(box);
+    scheduleFrame();
   }
 
-  void View::resizeFloating(const wlr_box& box) {
+  void View::requestFloatingResize(const wlr_box& box) {
     m_deferXwaylandConfigure = true;
     requestFloatingSize(box.width, box.height);
-    m_presentation.setRegion(box.width, box.height);
-    setPosition(box.x, box.y);
-    presentBox(box);
     m_deferXwaylandConfigure = false;
     if (m_xsurface != nullptr) {
       syncXwaylandConfigure();
     }
-    scheduleFrame();
+  }
+
+  void View::applyFloatingResize(const wlr_box& box) {
+    // Called from the frame path as well as from a grab start, so it must not schedule a frame of its own: a
+    // schedule inside a frame handler keeps the output drawing forever.
+    m_presentation.setRegion(box.width, box.height);
+    setPosition(box.x, box.y);
+    presentBox(box);
   }
 
   void View::resizeFloatingEdge(uint32_t edges, double delta) {

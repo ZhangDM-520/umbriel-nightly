@@ -285,7 +285,9 @@ namespace umbriel {
   }
 
   void View::applyPresentedCrop(const wlr_box& content, const wlr_box& surfaceClip) {
-    m_presentation.applyCrop(m_contentTree, rootSurface(), geometryBox(), content, surfaceClip);
+    m_presentation.applyCrop(
+        m_contentTree, rootSurface(), geometryBox(), content, surfaceClip, shrinkSampling(sizeGrabTracksPointer())
+    );
     m_presentedCropActive = true;
     syncXwaylandShape();
   }
@@ -315,6 +317,21 @@ namespace umbriel {
     }
     updateBlur(width, height);
     syncOwnedPresentation();
+  }
+
+  void View::reapplyGrabbedCrop() {
+    if (!sizeGrabTracksPointer() || m_presentedBox.width <= 0 || m_presentedBox.height <= 0) {
+      return;
+    }
+    // The same clip applyPresentation derives, against the box the grab already owns.
+    const wlr_box& geometry = geometryBox();
+    const wlr_box surfaceClip{
+        .x = geometry.x - m_presentation.offsetX(),
+        .y = geometry.y - m_presentation.offsetY(),
+        .width = m_presentedBox.width,
+        .height = m_presentedBox.height,
+    };
+    applyPresentedCrop(m_presentedBox, surfaceClip);
   }
 
   void View::syncOwnedPresentation() {

@@ -128,14 +128,15 @@ namespace umbriel {
   // Buffer crop
   void ViewPresentation::applyCrop(
       wlr_scene_tree* tree, wlr_surface* surface, const wlr_box& geometry, const wlr_box& content,
-      const wlr_box& surfaceClip
+      const wlr_box& surfaceClip, ShrinkSampling shrink
   ) const {
     struct Ctx {
       wlr_surface* surface;
       const wlr_box* geometry;
       const wlr_box* content;
       const wlr_box* clip;
-    } ctx{surface, &geometry, &content, &surfaceClip};
+      ShrinkSampling shrink;
+    } ctx{surface, &geometry, &content, &surfaceClip, shrink};
 
     wlr_scene_node_for_each_buffer(
         &tree->node,
@@ -152,7 +153,8 @@ namespace umbriel {
           int width = 0;
           int height = 0;
           wlr_scene_surface_get_size(sceneSurface, &width, &height);
-          const wlr_fbox src = croppedSourceBox(base, *ctx.geometry, *ctx.content, *ctx.clip, width, height);
+          const wlr_fbox src =
+              croppedSourceBox(base, *ctx.geometry, *ctx.content, *ctx.clip, width, height, ctx.shrink);
           if (src.width <= 0 || src.height <= 0) {
             return;
           }

@@ -1183,8 +1183,14 @@ namespace umbriel {
       } else {
         syncFloatingResizePosition();
         adoptFloatingClientSize();
-        // Enable + clip through the current presentation owner.
-        syncOwnedPresentation();
+        if (sizeGrabTracksPointer()) {
+          // The grab owns the presented box, so a commit at a different size cannot change it: the client's buffer
+          // is all that moved, and the scene helper reset the crop for it.
+          reapplyGrabbedCrop();
+        } else {
+          // Enable + clip through the current presentation owner.
+          syncOwnedPresentation();
+        }
       }
     } else {
       updateBlur();

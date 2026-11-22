@@ -5,10 +5,12 @@
 # client is slow or stops redrawing, while still throttling in-flight floating configures and unlocking on a bufferless
 # Wayland ack (such as cell-snapped terminals across sub-cell pointer moves).
 #
-# Five checks, one compositor:
+# Six checks, one compositor:
 #   instant      0 ms redraw delay: drawn and target lag stay at most 2 px, and settled commits appear in trace.
 #   slow         40 ms redraw delay: drawn and target lag still stay at most 2 px, while configures are throttled.
 #   no-redraw    never redraws after map: trace lag stays at most 2 px and held pixels match the dragged width.
+#   burst        40 moves with no pause: one frame applies the newest box, so the trace records a handful of steps and
+#                the drawn width still reaches the last one (coalescing must not lose the final target).
 #   stepped      RESIZE_STEP=50 client: bufferless ack on sub-step motion unlocks the next size configure while held, plus
 #                pointer-resizing a floatingMaximized RESIZE_STEP=100 window drops maximize and settles to its snapped commit.
 #   tiled_pinned two non-redrawing dwindle tiles plus a settling floating peer: growing tile fills its new slot with
@@ -98,6 +100,11 @@ worst_lag() {
 
 steps_since() { jq -s --argjson from "$1" '[.[$from:][] | select(.drawn_lag != null)] | length' "$TRACE"; }
 
+# The drawn width of the last applied step, so a coalesced burst can prove the newest box was not dropped.
+last_drawn_width() {
+  jq -s --argjson from "$1" '[.[$from:][] | select(.kind == "floating" and .drawn != null) | .drawn[2]] | last // 0' "$TRACE"
+}
+
 # Drives one resize of STEPS steps at STEP_MS pace, then reports the worst lags and trace event counts.
 sweep() {
   local label=$1 redraw=$2 delay=$3 from drawn target steps configures commits pid
@@ -129,21 +136,22 @@ sweep() {
   done
   pointer_hold "$OUTPUT_W" "$OUTPUT_H" move "$EDGE_X" "$EDGE_Y" mod logo press "$BTN_RIGHT" \
     "${moves[@]}" -- release "$BTN_RIGHT" mod none
-  if [[ $redraw == none ]]; then
-    local held_shot="$UMBRIEL_RUNTIME_DIR/pinned-held.png"
-    local held_x=0 held_w=0
-    for _ in $(seq 40); do
-      grim "$held_shot"
-      read -r held_x _ held_w _ < <("$UMBRIEL_PIXEL_PROBE" "$held_shot" bbox 'r > 0.8 && g < 0.2 && b < 0.2')
-      if ((held_x >= START_X - 2 && held_x <= START_X + 2 && held_w >= want_w - 2 && held_w <= want_w + 2)); then
-        break
-      fi
-      sleep 0.025
-    done
-    if ((held_x < START_X - 2 || held_x > START_X + 2 || held_w < want_w - 2 || held_w > want_w + 2)); then
-      echo "pinned held frame was ${held_w}px at x=${held_x}, expected ${want_w}px at x=${START_X}" >&2
-      exit 1
+  # While held, the drawn frame must fill the box the pointer made, whatever buffer the client has drawn into it:
+  # a client that never redraws contributes its one buffer, and a slow one is several steps behind. Both are only
+  # correct if the crop is re-derived for each commit the scene helper resets.
+  local held_shot="$UMBRIEL_RUNTIME_DIR/$label-held.png"
+  local held_x=0 held_w=0
+  for _ in $(seq 40); do
+    grim "$held_shot"
+    read -r held_x _ held_w _ < <("$UMBRIEL_PIXEL_PROBE" "$held_shot" bbox 'r > 0.8 && g < 0.2 && b < 0.2')
+    if ((held_x >= START_X - 2 && held_x <= START_X + 2 && held_w >= want_w - 2 && held_w <= want_w + 2)); then
+      break
     fi
+    sleep 0.025
+  done
+  if ((held_x < START_X - 2 || held_x > START_X + 2 || held_w < want_w - 2 || held_w > want_w + 2)); then
+    echo "${label} held frame was ${held_w}px at x=${held_x}, expected ${want_w}px at x=${START_X}" >&2
+    exit 1
   fi
   pointer_release
   if [[ $redraw != none ]]; then
@@ -156,7 +164,8 @@ sweep() {
   target=$(worst_lag "$from" target_lag)
   configures=$(jq -s --argjson from "$from" '[.[$from:][] | select(.event == "configure")] | length' "$TRACE")
   commits=$(jq -s --argjson from "$from" '[.[$from:][] | select(.event == "commit")] | length' "$TRACE")
-  echo "${label} ${drawn} ${target} ${steps} ${configures} ${commits}"
+  last=$(last_drawn_width "$from")
+  echo "${label} ${drawn} ${target} ${steps} ${configures} ${commits} ${last}"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   if [[ -n $pinned_fd ]]; then
@@ -167,12 +176,13 @@ sweep() {
 
 write_config
 
+want_w=$((START_W + STEPS * STEP_PX))
 sweep_out=$(sweep instant "" 0)
-read -r instant drawn_instant target_instant steps configures_instant commits_instant <<< "$sweep_out"
+read -r instant drawn_instant target_instant steps configures_instant commits_instant last_instant <<< "$sweep_out"
 sweep_out=$(sweep slow "" 40)
-read -r slow drawn_slow target_slow _ configures_slow commits_slow <<< "$sweep_out"
+read -r slow drawn_slow target_slow _ configures_slow commits_slow _ <<< "$sweep_out"
 sweep_out=$(sweep pinned none 0)
-read -r pinned drawn_none target_none steps_none configures_none _ <<< "$sweep_out"
+read -r pinned drawn_none target_none steps_none configures_none _ last_none <<< "$sweep_out"
 
 # Both target and drawn boxes must track the pointer in every run, regardless of client redraw latency.
 for pair in \
@@ -189,14 +199,52 @@ for pair in \
   fi
 done
 
-if ((steps < STEPS - 2)) || ((steps_none < STEPS - 2)); then
+# The trace records one step per applied presentation, not per pointer event, so its count is a floor: every recorded
+# step must still track the pointer, and the newest box must reach the window.
+if ((steps < 3)) || ((steps_none < 3)); then
   echo "recorded $steps instant and $steps_none pinned resize steps of $STEPS; the trace is not wired to the pointer"
   exit 1
 fi
+if ((last_instant < want_w - 2)) || ((last_none < want_w - 2)); then
+  echo "coalesced resize lost the newest box: instant ${last_instant}px, pinned ${last_none}px, want ${want_w}px"
+  exit 1
+fi
+
+# A burst of moves with no pause settles inside one frame, which pins the coalescing deterministically: however the
+# client's writes land, the scene must be laid out a handful of times for the whole burst, and the box it lands on must
+# be the newest one rather than the first.
+# 30 steps of 10 px from the right edge lands at 1200, inside the 1280 output: a pointer clamped at the output edge
+# would stop producing new boxes and the last-box assertion below would measure the clamp instead.
+readonly BURST_STEPS=30
+readonly BURST_LOG="$UMBRIEL_RUNTIME_DIR/client-burst.log"
+FILL_COLOR=0xFFFF0000 FOLLOW_CONFIGURES=1 RESIZE_DELAY_MS=0 \
+  "$UMBRIEL_UNMAP_CLIENT" "$TITLE" "$START_W" "$START_H" > "$BURST_LOG" 2>&1 &
+burst_pid=$!
+await_mapped
+"$UMBRIEL" settle > /dev/null
+burst_from=$(lines)
+burst_moves=()
+for ((i = 1; i <= BURST_STEPS; i++)); do
+  burst_moves+=(move $((EDGE_X + i * STEP_PX)) "$EDGE_Y")
+done
+pointer_hold "$OUTPUT_W" "$OUTPUT_H" move "$EDGE_X" "$EDGE_Y" mod logo press "$BTN_RIGHT" \
+  "${burst_moves[@]}" -- release "$BTN_RIGHT" mod none
+pointer_release
+"$UMBRIEL" settle > /dev/null
+burst_steps=$(steps_since "$burst_from")
+burst_last=$(last_drawn_width "$burst_from")
+# A layout per event would record all 40; a coalesced burst records one per frame that landed inside it.
+if ((burst_steps > 16)) || ((burst_last < START_W + BURST_STEPS * STEP_PX - 2)); then
+  echo "burst of ${BURST_STEPS} moves laid out ${burst_steps} times, last drawn ${burst_last}px, want $((START_W + BURST_STEPS * STEP_PX))px"
+  exit 1
+fi
+kill "$burst_pid" 2>/dev/null || true
+wait "$burst_pid" 2>/dev/null || true
+await_window_closed "$TITLE"
 
 # The floating grab still throttles in-flight configures so slow clients are not flooded.
-if ((configures_instant + 3 < steps)) || ((configures_slow * 2 > steps)) || ((configures_none > 3)); then
-  echo "configure throttle: ${configures_instant} instant, ${configures_slow} slow, ${configures_none} pinned over ${steps} steps"
+if ((configures_instant + 3 < STEPS)) || ((configures_slow * 2 > STEPS)) || ((configures_none > 3)); then
+  echo "configure throttle: ${configures_instant} instant, ${configures_slow} slow, ${configures_none} pinned over ${STEPS} pointer steps"
   exit 1
 fi
 
@@ -219,6 +267,20 @@ pointer_hold "$OUTPUT_W" "$OUTPUT_H" move "$EDGE_X" "$EDGE_Y" mod logo press "$B
 await_lines "$STEP_LOG" 'ack-same 600x400' 1 0.025
 pointer_step stepped_grown
 await_lines "$STEP_LOG" 'resized 650x400' 1 0.025
+# The client answered with a buffer 10 px narrower than the box the pointer made. The drawn frame must stay at the box:
+# the commit reset the crop, so only a re-derived crop keeps the window from snapping back to its buffer.
+stepped_shot="$UMBRIEL_RUNTIME_DIR/stepped-held.png"
+stepped_w=0
+for _ in $(seq 40); do
+  grim "$stepped_shot"
+  read -r _ _ stepped_w _ < <("$UMBRIEL_PIXEL_PROBE" "$stepped_shot" bbox 'r > 0.8 && g < 0.2 && b < 0.2')
+  ((stepped_w >= 658 && stepped_w <= 662)) && break
+  sleep 0.025
+done
+if ((stepped_w < 658 || stepped_w > 662)); then
+  echo "a commit under the grab snapped the frame to ${stepped_w}px, expected the 660px box"
+  exit 1
+fi
 pointer_release
 kill "$step_pid" 2>/dev/null || true
 wait "$step_pid" 2>/dev/null || true
@@ -369,4 +431,4 @@ exec {left_fd}<&-
 exec {right_fd}<&-
 exec {peer_fd}<&-
 
-echo "lag px (drawn/target): instant ${drawn_instant}/${target_instant}, slow ${drawn_slow}/${target_slow}, pinned ${drawn_none}/${target_none}; configures ${configures_instant}/${configures_slow}/${configures_none} over ${steps} steps; stepped ok; tiled ${tiled_steps} steps green_w=${tiled_green_w} blue_x=${tiled_blue_x} peer_w=${peer_w}"
+echo "lag px (drawn/target): instant ${drawn_instant}/${target_instant}, slow ${drawn_slow}/${target_slow}, pinned ${drawn_none}/${target_none}; applied ${steps} frames; configures ${configures_instant}/${configures_slow}/${configures_none} over ${STEPS} steps; burst ${burst_steps} applies for ${BURST_STEPS} moves; stepped ok; tiled ${tiled_steps} steps green_w=${tiled_green_w} blue_x=${tiled_blue_x} peer_w=${peer_w}"

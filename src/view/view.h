@@ -691,6 +691,9 @@ namespace umbriel {
     // stays under it at the same box and keeps drawing its own shadow, so the copy takes none.
     [[nodiscard]] CloseSnapshotId captureHeldSnapshot();
     void applyPresentedSize();
+    // A commit under a pointer resize replaces the client's buffer, which resets the crop; re-derive it against the
+    // box the grab owns instead of re-running the whole presentation.
+    void reapplyGrabbedCrop();
     // Refresh presentation through whichever owner currently holds the view.
     // Scratchpads are detached from workspaces but still need animated crop
     // and chrome updates.
@@ -801,7 +804,10 @@ namespace umbriel {
     // Keep floats visually at the last requested size while client geometry lags.
     void syncFloatingSurfaceClip();
     void beginFloatingResize(uint32_t edges);
-    void resizeFloating(const wlr_box& box);
+    // A pointer resize asks the client for the new size on the motion event, so client latency is unchanged, and
+    // applies the box to the scene from the frame path: the layout pipeline is what a drag cannot afford per event.
+    void requestFloatingResize(const wlr_box& box);
+    void applyFloatingResize(const wlr_box& box);
     void finishFloatingResize();
     void sendFloatingSize(int width, int height);
     void commitFloatingSize();
