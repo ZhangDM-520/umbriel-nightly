@@ -327,7 +327,7 @@ namespace umbriel {
             : currentOutput();
         assignedScratchpad = scratchpad->assignAutomatic(
             this, *rule.defaultScratchpad, restoreOutput,
-            ScratchpadManager::AutomaticAdmission{
+            ScratchpadManager::AdmissionOptions{
                 .restoreOutput = restoreOutput,
                 .restoreWorkspace = restoreWorkspace,
                 .focusOrigin = restoreOutput,
@@ -357,7 +357,7 @@ namespace umbriel {
             : currentOutput();
         assignedLaunchScratchpad = scratchpad->assignAutomatic(
             this, m_launchScratchpad, restoreOutput,
-            ScratchpadManager::AutomaticAdmission{
+            ScratchpadManager::AdmissionOptions{
                 .restoreOutput = restoreOutput,
                 .restoreWorkspace = restoreWorkspace,
                 .focusOrigin = restoreOutput,

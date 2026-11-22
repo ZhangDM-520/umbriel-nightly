@@ -777,7 +777,7 @@ namespace umbriel {
         : currentOutput();
     return scratchpad->assignFromParent(
         this, parent,
-        ScratchpadManager::AutomaticAdmission{
+        ScratchpadManager::AdmissionOptions{
             .restoreOutput = restoreOutput,
             .restoreWorkspace = restoreWorkspace,
             .focusOrigin = scratchpad->outputFor(parent),
