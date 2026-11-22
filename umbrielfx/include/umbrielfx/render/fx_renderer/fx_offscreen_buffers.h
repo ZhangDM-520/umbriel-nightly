@@ -73,8 +73,18 @@ struct fx_offscreen_buffers {
   struct fx_target_buffers group;
 };
 
+struct fx_animation_buffer_usage {
+  unsigned depth;
+  bool backdrop;
+  bool shadow_blur;
+  bool in_place;
+};
+
 void fx_offscreen_buffers_destroy(struct fx_offscreen_buffers* fbos);
 void fx_offscreen_buffers_clear_group(struct fx_offscreen_buffers* fbos);
+void fx_offscreen_buffers_trim_output_animation(
+    struct fx_offscreen_buffers* fbos, const struct fx_animation_buffer_usage* keep
+);
 struct fx_offscreen_buffers* fx_offscreen_buffers_lookup(struct wlr_output* output);
 struct fx_offscreen_buffers* fx_offscreen_buffers_try_get(struct wlr_output* output);
 void fx_offscreen_buffers_invalidate_blend(struct wlr_output* output);
@@ -83,6 +93,7 @@ bool fx_offscreen_buffers_has_optimized_no_blur(const struct fx_offscreen_buffer
 bool fx_offscreen_buffers_clear_blur(struct fx_offscreen_buffers* fbos);
 bool fx_offscreen_buffers_clear_optimized_blur(struct fx_offscreen_buffers* fbos);
 void fx_offscreen_buffers_clear_optimized_no_blur(struct fx_offscreen_buffers* fbos);
+void fx_offscreen_buffers_clear_blur_saved_pixels(struct fx_offscreen_buffers* fbos);
 void fx_offscreen_buffers_clear_animation(struct fx_offscreen_buffers* fbos);
 
 #endif

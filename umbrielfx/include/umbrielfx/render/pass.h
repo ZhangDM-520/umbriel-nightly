@@ -8,6 +8,7 @@
 #include <GLES2/gl2.h>
 #include <stdbool.h>
 #include <umbrielfx/render/effect.h>
+#include <umbrielfx/render/fx_renderer/fx_offscreen_buffers.h>
 #include <wlr/render/color.h>
 #include <wlr/render/interface.h>
 #include <wlr/render/pass.h>
@@ -76,6 +77,8 @@ struct fx_gles_render_pass {
   // inside it allocate from the offscreen group set.
   unsigned group_depth;
   bool group_used;
+  bool trim_output_animation_buffers;
+  struct fx_animation_buffer_usage output_animation_used;
   struct wl_list animation_history_updates;
   // The target's unfiltered composition was copied into the output buffer's
   // effect capture; it becomes readable once the pass submits.
@@ -293,6 +296,13 @@ bool fx_render_pass_add_optimized_blur(
  * light or the other way round.
  */
 bool fx_render_pass_optimized_blur_stale(const struct fx_gles_render_pass* pass);
+/**
+ * Whether `fbos` (or `pass->fx_offscreen_buffers`) holds an optimized blur
+ * cache usable by the current pass without falling back to live blur.
+ */
+bool fx_render_pass_has_usable_optimized_blur(
+    const struct fx_gles_render_pass* pass, const struct fx_offscreen_buffers* fbos
+);
 
 /**
  * Render from one buffer to another. False when the source cannot be sampled.
