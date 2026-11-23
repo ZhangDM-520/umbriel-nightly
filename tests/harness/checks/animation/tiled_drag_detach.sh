@@ -122,7 +122,7 @@ write_config dwindle true true
 
 before_w=$(red_strip_width 720x8+0+48)
 read -r bx by <<< "$(blue_center)"
-pointer_hold "$OUTPUT_W" "$OUTPUT_H" move "$bx" "$by" mod logo press "$BTN_LEFT" move 1200 600 -- release "$BTN_LEFT" mod none
+pointer_hold "$OUTPUT_W" "$OUTPUT_H" move "$bx" "$by" mod logo press "$BTN_LEFT" move 1200 600 -- move 100 600 release "$BTN_LEFT" mod none
 "$UMBRIEL" clock-advance 320
 w1=$(red_strip_width 720x8+0+48)
 "$UMBRIEL" clock-advance 40
@@ -144,8 +144,9 @@ write_config dwindle false false
 "$UMBRIEL" clock-advance 1000
 "$UMBRIEL" settle
 
+before_snap=$(red_strip_width 720x8+0+48)
 read -r bx by <<< "$(blue_center)"
-pointer_hold "$OUTPUT_W" "$OUTPUT_H" move "$bx" "$by" mod logo press "$BTN_LEFT" move 1200 600 -- release "$BTN_LEFT" mod none
+pointer_hold "$OUTPUT_W" "$OUTPUT_H" move "$bx" "$by" mod logo press "$BTN_LEFT" move 1200 600 -- move 100 600 release "$BTN_LEFT" mod none
 "$UMBRIEL" clock-advance 50
 w_snap=$(red_strip_width 720x8+0+48)
 "$UMBRIEL" clock-advance 500
@@ -155,8 +156,8 @@ pointer_release
 "$UMBRIEL" clock-advance 1000
 "$UMBRIEL" settle
 
-if ((w_snap != w_snap_final)); then
-  echo "expected immediate snap with animations disabled: w_snap=$w_snap final=$w_snap_final"
+if ! ((before_snap < w_snap && w_snap == w_snap_final)); then
+  echo "expected immediate snap with animations disabled: before=$before_snap w_snap=$w_snap final=$w_snap_final"
   exit 1
 fi
 
