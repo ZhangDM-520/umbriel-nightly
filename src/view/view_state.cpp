@@ -425,9 +425,9 @@ namespace umbriel {
       return;
     }
     if (m_maximizedToEdges) {
-      setMaximizedToEdges(false, false);
+      setMaximizedToEdges(false, true);
     } else if (m_floatingMaximized) {
-      setMaximized(false, false);
+      setMaximized(false, true);
     }
   }
 

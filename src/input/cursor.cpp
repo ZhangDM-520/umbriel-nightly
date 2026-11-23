@@ -3087,7 +3087,7 @@ namespace umbriel {
       const int width = view->floatingSize()[0];
       const double fraction = width > 0 ? std::clamp((grab.startX - view->layoutX()) / width, 0.0, 1.0) : 0.5;
       view->restoreMaximizedForMove();
-      view->clearRegion(false);
+      view->clearRegion(true);
       grab.preDragX = view->layoutTargetX();
       grab.preDragY = view->layoutTargetY();
       const auto restored = view->floatingSize();
