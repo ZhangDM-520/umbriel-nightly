@@ -1098,7 +1098,11 @@ namespace umbriel {
     bool tiled = view->tiled();
     if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
         scratchpad != nullptr && !tiled && scratchpad->contains(view)) {
+      const bool wasMaximized = view->maximizedToEdges() || view->floatingMaximized();
       view->restoreMaximizedForMove();
+      if (wasMaximized) {
+        view->setPosition(view->layoutTargetX(), view->layoutTargetY());
+      }
     }
 
     if (!tiled && (view->region() || view->floatingMaximized())) {

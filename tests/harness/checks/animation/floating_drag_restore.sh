@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Dragging a maximized or region-snapped floating window must animate its size
-# back to the restored floating size while staying anchored to the pointer.
+# Dragging a maximized or region-snapped floating window (including a maximized
+# scratchpad) must animate its size restore while preserving the grab offset.
 set -euo pipefail
 source "$(dirname "$UMBRIEL_HARNESS_LIB")/title_bar.sh"
 
 cat >>"$UMBRIEL_CONFIG" <<'CONFIG'
 [animation]
-duration_ms = 2000
+duration_ms = 400
 curve = "linear"
 
 [animation.windows_in]
@@ -46,15 +46,20 @@ title_bar_bbox() {
   "$UMBRIEL_PIXEL_PROBE" "$image" bbox 'r > 0.9 && g < 0.1 && b < 0.1'
 }
 
+window_pos() {
+  "$UMBRIEL" windows --json \
+    | jq -r '.[] | select(.title == "floating-drag-restore") | "\(.x) \(.y)"'
+}
+
 assert_drag_restore_animates() {
   local label=$1 start_width=$2
   "$UMBRIEL" clock-freeze >/dev/null
   pointer_hold 1280 720 move 100 20 press 272 move 100 120 -- release 272
-  "$UMBRIEL" clock-advance 200 >/dev/null
+  "$UMBRIEL" clock-advance 80 >/dev/null
   local x1 y1 w1 _h1 x2 y2 w2 _h2 _xd _yd done_w _hd
-  read -r x1 y1 w1 _h1 < <(title_bar_bbox "${label}-200ms")
-  "$UMBRIEL" clock-advance 400 >/dev/null
-  read -r x2 y2 w2 _h2 < <(title_bar_bbox "${label}-600ms")
+  read -r x1 y1 w1 _h1 < <(title_bar_bbox "${label}-80ms")
+  "$UMBRIEL" clock-advance 160 >/dev/null
+  read -r x2 y2 w2 _h2 < <(title_bar_bbox "${label}-240ms")
   if ! (( start_width > w1 && w1 > w2 && w2 > 480 )); then
     echo "$label did not animate monotonically: w1=$w1 w2=$w2 (expected $start_width > w1 > w2 > 480)"
     exit 1
@@ -63,7 +68,7 @@ assert_drag_restore_animates() {
     echo "$label position drifted during drag: (${x1},${y1}) -> (${x2},${y2})"
     exit 1
   fi
-  "$UMBRIEL" clock-advance 2000 >/dev/null
+  "$UMBRIEL" clock-advance 500 >/dev/null
   pointer_release
   "$UMBRIEL" clock-resume >/dev/null
   "$UMBRIEL" settle >/dev/null
@@ -97,4 +102,33 @@ assert_drag_restore_animates stacking-max-drag 1264
 title_bar_wait_box floating-drag-restore 628x676+8+36
 assert_drag_restore_animates stacking-region-drag 628
 
-echo "maximized (scrolling/stacking) and region-snapped floating drags animate size restore"
+# 4. Maximized scratchpad dragged with move animations enabled preserves the restored grab offset.
+"$UMBRIEL" msg window-move-to-scratchpad >/dev/null
+"$UMBRIEL" msg scratchpad-toggle >/dev/null
+"$UMBRIEL" settle >/dev/null
+read -r sx sy < <(window_pos)
+"$UMBRIEL" msg window-toggle-maximize >/dev/null
+"$UMBRIEL" settle >/dev/null
+title_bar_wait_box floating-drag-restore 1264x676+8+36
+
+"$UMBRIEL" clock-freeze >/dev/null
+pointer_hold 1280 720 move 100 200 mod logo press 272 move 140 230 -- release 272 mod none
+"$UMBRIEL" clock-advance 80 >/dev/null
+read -r _x1 _y1 sw1 _h1 < <(title_bar_bbox scratchpad-max-80ms)
+"$UMBRIEL" clock-advance 160 >/dev/null
+read -r _x2 _y2 sw2 _h2 < <(title_bar_bbox scratchpad-max-240ms)
+if ! (( 1264 > sw1 && sw1 > sw2 && sw2 > 480 )); then
+  echo "scratchpad max drag did not animate monotonically: w1=$sw1 w2=$sw2"
+  exit 1
+fi
+"$UMBRIEL" clock-advance 500 >/dev/null
+pointer_release
+"$UMBRIEL" clock-resume >/dev/null
+"$UMBRIEL" settle >/dev/null
+read -r dx dy < <(window_pos)
+if (( dx < sx + 39 || dx > sx + 41 || dy < sy + 29 || dy > sy + 31 )); then
+  echo "scratchpad max drag dropped at (${dx},${dy}), expected near ($((sx + 40)),$((sy + 30))) from (${sx},${sy})"
+  exit 1
+fi
+
+echo "maximized (scrolling/stacking/scratchpad) and region-snapped floating drags animate size restore"
