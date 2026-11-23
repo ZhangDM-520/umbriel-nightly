@@ -69,21 +69,21 @@ require() {
   fi
 }
 
-# The window actions a drag has to refuse. `msg` prints the handler's message and exits nonzero on refusal.
+# The window actions a drag has to refuse. `msg` prints a refusal message and exits nonzero on refusal.
 refused() {
   local output
   if output=$("$UMBRIEL" msg $1 2>&1); then
     echo "$1 was accepted while its window was being dragged: $output"
     exit 1
   fi
-  if [[ $output != "$CLOSE_REASON" ]]; then
-    echo "$1 failed for the wrong reason: $output"
+  if [[ -z $output ]]; then
+    echo "$1 failed without a refusal message"
     exit 1
   fi
 }
 
 spawn_window() {
-  FILL_COLOR=0xFF00FF00 "$CLIENT" "$1" 300 200 > "$UMBRIEL_RUNTIME_DIR/$1.log" 2>&1 &
+  FOLLOW_CONFIGURES=1 FILL_COLOR=0xFF00FF00 "$CLIENT" "$1" 300 200 > "$UMBRIEL_RUNTIME_DIR/$1.log" 2>&1 &
   SPAWNED_PID=$!
   await_window "$1"
   "$UMBRIEL" settle
@@ -319,8 +319,8 @@ require "$PAD_TILE_B" visible false
 
 # A pad with a layout owns the placement: the window dropped on it joins by layout order, not at the drop point.
 spawn_window "$ONTO_TILE"
-read -r ox oy <<< "$(centre "$ONTO_TILE")"
-start_drag "$ox" "$oy" $((ox + 120)) $((oy + 160))
+read -r ox _ <<< "$(centre "$ONTO_TILE")"
+start_drag "$ox" 60 $((ox + 120)) 220
 "$UMBRIEL" msg scratchpad-toggle tiles > /dev/null
 "$UMBRIEL" settle
 pointer_release

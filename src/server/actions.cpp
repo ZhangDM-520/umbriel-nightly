@@ -2588,13 +2588,23 @@ namespace umbriel {
 
   } // namespace
 
-  bool actionMovesCarriedWindow(Server& server, KeybindAction action) {
+  bool actionMovesCarriedWindow(Server& server, const Keybind& bind) {
     View* dragged = carriedView(server);
-    if (dragged == nullptr || !movesWindow(action)) {
+    if (dragged == nullptr || !movesWindow(bind.action)) {
       return false;
     }
     ScratchpadManager* scratchpad = server.scratchpadManager();
-    return scratchpad != nullptr && scratchpad->contains(dragged);
+    if (scratchpad == nullptr || !scratchpad->contains(dragged)) {
+      return false;
+    }
+    if (const std::string_view id = windowIdArg(bind); !id.empty()) {
+      const auto target = placementTarget(server, id);
+      return target.has_value() && target.value() == dragged;
+    }
+    if (View* focused = focusedWindow(server); focused != nullptr && focused->placementRoot() != dragged) {
+      return false;
+    }
+    return true;
   }
 
   ActionHandlerFn actionHandlerFor(KeybindAction action) {

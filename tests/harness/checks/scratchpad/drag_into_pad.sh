@@ -75,7 +75,7 @@ settle_motion() {
 
 spawn_window() {
   settle_motion
-  FILL_COLOR=0xFF00FF00 "$CLIENT" "$1" 400 300 > "$UMBRIEL_RUNTIME_DIR/$1.log" 2>&1 &
+  FOLLOW_CONFIGURES=1 FILL_COLOR=0xFF00FF00 "$CLIENT" "$1" 400 300 > "$UMBRIEL_RUNTIME_DIR/$1.log" 2>&1 &
   SPAWNED_PID=$!
   await_window "$1"
   "$UMBRIEL" settle
@@ -229,7 +229,7 @@ settle_motion
 # A lifted tab group is declined as well: the group lands on the workspace under the pad instead of being split into it.
 TAB_PIDS=()
 spawn_tab() {
-  FILL_COLOR=0xFF00FF00 "$CLIENT" "$1" 400 300 > "$UMBRIEL_RUNTIME_DIR/$1.log" 2>&1 &
+  FOLLOW_CONFIGURES=1 FILL_COLOR=0xFF00FF00 "$CLIENT" "$1" 400 300 > "$UMBRIEL_RUNTIME_DIR/$1.log" 2>&1 &
   TAB_PIDS+=("$!")
   await_window "$1"
 }
@@ -284,5 +284,57 @@ if [[ $(field drag-into-pad-moved scratchpad) != default || $(field drag-into-pa
   echo "a window moved into a pad shown on another output did not join it there: $("$UMBRIEL" windows --json)"
   exit 1
 fi
+"$UMBRIEL" msg scratchpad-toggle > /dev/null
+settle_motion
 
-echo "drops over an open pad joined it (float $float_green, cross-output $tile_green), declined a pin drag ($declined_green) and a tab group onto the workspace, and dismissing the pad never moved a member"
+# A non-modal pad leaves the windows behind it usable, so dragging a background window over the same output must not
+# be swallowed into the non-modal pad.
+cat >> "$UMBRIEL_CONFIG" <<'EOF'
+
+[[scratchpad]]
+name = "floaty"
+modal = false
+EOF
+"$UMBRIEL" msg config-reload > /dev/null
+"$POINTER" $LAYOUT_W $LAYOUT_H move 640 360
+spawn_window drag-into-pad-nonmodal-member
+"$UMBRIEL" msg window-focus "$(field drag-into-pad-nonmodal-member id)" > /dev/null
+"$UMBRIEL" msg window-move-to-scratchpad floaty > /dev/null
+"$UMBRIEL" msg scratchpad-toggle floaty > /dev/null
+settle_motion
+if [[ $(field drag-into-pad-nonmodal-member scratchpad) != floaty || $(field drag-into-pad-nonmodal-member visible) != true ]]; then
+  echo "non-modal pad member was not visible before background drag: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+spawn_window drag-into-pad-nonmodal-bg
+"$UMBRIEL" msg window-focus "$(field drag-into-pad-nonmodal-bg id)" > /dev/null
+"$UMBRIEL" msg window-toggle-floating > /dev/null
+"$UMBRIEL" msg window-center > /dev/null
+settle_motion
+if [[ $(field drag-into-pad-nonmodal-bg floating) != true ]]; then
+  echo "drag-into-pad-nonmodal-bg did not float: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+read -r nx ny nw nh < <(box drag-into-pad-nonmodal-bg)
+ox=0
+if [[ $(field drag-into-pad-nonmodal-bg output) == HEADLESS-1 ]]; then
+  ox=1280
+fi
+start_drag $((ox + nx + 20)) $((ny + 20)) $((ox + nx + 140)) $((ny + 90))
+pointer_release
+settle_motion
+read -r nx2 ny2 _ _ < <(box drag-into-pad-nonmodal-bg)
+if [[ $(field drag-into-pad-nonmodal-member visible) != true ]]; then
+  echo "non-modal pad did not remain visible at release: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+if (( nx2 == nx && ny2 == ny )); then
+  echo "background drag over non-modal pad never moved the window: before=($nx,$ny) after=($nx2,$ny2) windows=$("$UMBRIEL" windows --json)"
+  exit 1
+fi
+if [[ $(field drag-into-pad-nonmodal-bg scratchpad) != "" ]]; then
+  echo "a drag over a non-modal pad was swallowed into it: $("$UMBRIEL" windows --json)"
+  exit 1
+fi
+
+echo "drops over a modal pad joined it (float $float_green, cross-output $tile_green), declined a pin drag ($declined_green), a tab group, and a non-modal pad, and dismissing the pad never moved a member"
