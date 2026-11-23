@@ -3316,6 +3316,11 @@ namespace umbriel {
     if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
         scratchpad != nullptr && destination != nullptr && scratchpad->memberOfHiddenPad(view)) {
       scratchpad->dropOut(view, destination);
+      for (View* tab : grab->tabGroup.tabs) {
+        if (tab != view && scratchpad->memberOfHiddenPad(tab)) {
+          scratchpad->dropOut(tab, destination);
+        }
+      }
       // The window left its pad, so the drop now belongs to the workspace under the pointer: the grab still aims at
       // the closed pad's layout, where the window is no longer a member. Recomputing may find no target at all, such
       // as under a panel, so the workspace is set before the refinement rather than only by it.

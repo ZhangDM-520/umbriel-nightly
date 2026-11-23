@@ -362,8 +362,11 @@ namespace umbriel {
   }
 
   bool ScratchpadManager::dropInto(View* view, Output* output, Workspace* sourceWorkspace, int dropX, int dropY) {
+    if (view == nullptr || !modalOn(output)) {
+      return false;
+    }
     const std::string_view name = visibleNameOn(output);
-    if (view == nullptr || name.empty()) {
+    if (name.empty()) {
       return false;
     }
     // The drop point has to become the layout target, or the window snaps back to where the drag picked it up. A

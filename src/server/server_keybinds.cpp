@@ -154,7 +154,7 @@ namespace umbriel {
       }
       return false;
     }
-    if (actionMovesCarriedWindow(*this, bind.action)) {
+    if (actionMovesCarriedWindow(*this, bind)) {
       if (error != nullptr) {
         *error = "the window is being dragged";
       }
