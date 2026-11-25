@@ -1,10 +1,11 @@
 #pragma once
 
+#include <cmath>
+#include <cstdint>
+
 extern "C" {
 #include <wlr/util/box.h>
 }
-
-#include <cstdint>
 
 namespace umbriel {
   // Which box edge the pointer is holding, and how far that edge is from the pointer. A resize grab owns one or two
@@ -15,7 +16,7 @@ namespace umbriel {
     double dx = 0;
     double dy = 0;
     // The larger of the two, which is the figure a check bounds.
-    double magnitude() const;
+    [[nodiscard]] double magnitude() const;
   };
 
   // `edges` is a WLR_EDGE_* mask. `box` is the drawn box, so the result is the lag the eye sees rather than the lag
