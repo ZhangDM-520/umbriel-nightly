@@ -172,7 +172,7 @@ Keep the close-animation row's `backdropOwner`, `backdropFade` and `retargetFade
 
 ### C16 — drag-animation harness fixtures
 
-The tiled detach check uses `underfull_strip = "start"`, the current spelling from `upstream-rejected`. The older title-bar drop-zone check asserts the snapped restore box before the client commits, so its fixture disables `windows_resize`. The floating drag restore check exercises intermediate frames with resize animation enabled.
+The tiled detach check uses `underfull_strip = "start"`, the current spelling from `upstream-rejected`. The older title-bar drop-zone check asserts the snapped restore box before the client commits, so its fixture disables `windows_resize`. The floating drag restore check exercises intermediate frames with resize animation enabled. The tiled-detach check resumes the clock while release settles before freezing it for the next measurement. The overview scratchpad-layout fixture uses clients that follow compositor resize requests, so its pixel checks measure tiled windows.
 
 ### C17 — render-scale guidance and box filtering
 
