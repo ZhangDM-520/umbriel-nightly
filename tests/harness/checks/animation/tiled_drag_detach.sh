@@ -97,8 +97,9 @@ w2=$(red_strip_width 640x8+0+10)
 "$UMBRIEL" settle
 final_left=$(red_strip_width 640x8+0+10)
 pointer_release
-"$UMBRIEL" clock-advance 1000
+"$UMBRIEL" clock-resume
 "$UMBRIEL" settle
+"$UMBRIEL" clock-freeze
 
 if ! ((before_left < w1 && w1 < w2 && w2 < final_left)); then
   echo "scrolling drag detach did not animate monotonically: before=$before_left w1=$w1 w2=$w2 final=$final_left"
@@ -125,8 +126,9 @@ w2=$(red_strip_width "${OUTPUT_W}x8+0+10")
 "$UMBRIEL" settle
 final_w=$(red_strip_width "${OUTPUT_W}x8+0+10")
 pointer_release
-"$UMBRIEL" clock-advance 1000
+"$UMBRIEL" clock-resume
 "$UMBRIEL" settle
+"$UMBRIEL" clock-freeze
 
 if ! ((before_w < w1 && w1 < w2 && w2 < final_w)); then
   echo "dwindle drag detach did not animate monotonically: before=$before_w w1=$w1 w2=$w2 final=$final_w"
@@ -147,8 +149,9 @@ w_snap=$(red_strip_width "${OUTPUT_W}x8+0+10")
 "$UMBRIEL" settle
 w_snap_final=$(red_strip_width "${OUTPUT_W}x8+0+10")
 pointer_release
-"$UMBRIEL" clock-advance 1000
+"$UMBRIEL" clock-resume
 "$UMBRIEL" settle
+"$UMBRIEL" clock-freeze
 
 if ! ((before_snap < w_snap && w_snap == w_snap_final)); then
   echo "expected immediate snap with animations disabled: before=$before_snap w_snap=$w_snap final=$w_snap_final"

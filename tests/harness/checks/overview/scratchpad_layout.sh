@@ -69,7 +69,7 @@ for index in a b c; do
     b) colour=0xFF00FF00 ;;
     c) colour=0xFF0000FF ;;
   esac
-  FILL_COLOR=$colour "$CLIENT" "overview-pad-layout-$index" 400 300 \
+  FOLLOW_CONFIGURES=1 FILL_COLOR=$colour "$CLIENT" "overview-pad-layout-$index" 400 300 \
     > "$UMBRIEL_RUNTIME_DIR/pad-layout-$index.log" 2>&1 &
 done
 for _ in $(seq 60); do
