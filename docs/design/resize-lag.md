@@ -4,7 +4,7 @@ Dragging a window edge moves two things that can diverge if presentation waits f
 
 ## What each grab presents
 
-When `View::sizeGrabActive` holds (and `View::tiledResizeWaitsForClient` is false), `View::presentedWidth` and `View::presentedHeight` return the compositor's target box, and `View::applyPresentation` fits the latest committed client buffer into that box through `View::applyPresentedCrop`: a box larger than the buffer scales it, and a smaller one follows `shrinkSampling`. A grab owns the box for as long as it lasts, so a shrinking pointer drag shows less of the window at 1:1 instead of filtering it down; every other shrink is an animation whose purpose is to show the whole frame smaller, so it scales. `m_presentedCropActive` ensures `View::resetPresentedSurface` restores 1:1 presentation when the grab ends and the client settles.
+When `View::sizeGrabActive` holds, `View::presentedWidth` and `View::presentedHeight` return the compositor's target box, and `View::applyPresentation` fits the latest committed client buffer into that box through `View::applyPresentedCrop`: a box larger than the buffer scales it, and a smaller one follows `shrinkSampling`. A grab owns the box for as long as it lasts, so a shrinking pointer drag shows less of the window at 1:1 instead of filtering it down; every other shrink is an animation whose purpose is to show the whole frame smaller, so it scales. `m_presentedCropActive` ensures `View::resetPresentedSurface` restores 1:1 presentation when the grab ends and the client settles.
 
 ## A floating grab presents once per frame
 
@@ -24,7 +24,7 @@ The `windows_resize` timeline does not enter pointer resizes. A pointer resize a
 
 ## Tiled resizes
 
-A tiled grab applies the pointer delta to the layout through `ResizeGrab::applyDelta` and schedules an arrange on the next output frame, so the drawn box stretches through `View::applyPresentedCrop` toward `Workspace::presentedTiledBox` and restores 1:1 sampling on release in `Cursor::resetMode`. Setting `[animation.windows_resize] wait_for_redraw = true` (`View::tiledResizeWaitsForClient`) opts tiled drags into unstretched held switches capped by `kRedrawWaitMs` instead.
+A tiled grab applies the pointer delta to the layout through `ResizeGrab::applyDelta` and schedules an arrange on the next output frame, so the drawn box stretches through `View::applyPresentedCrop` toward `Workspace::presentedTiledBox` and restores 1:1 sampling on release in `Cursor::resetMode`.
 
 ## Measuring it
 
