@@ -3123,7 +3123,7 @@ namespace umbriel {
           grab.sourceWidth = grab.tabGroup.home.width;
         }
       }
-      grab.sourceWorkspace->layoutDetach(grab.view);
+      grab.sourceWorkspace->layoutDetach(grab.view, true);
     }
     grab.view->enterDragPresentation();
     grab.physics = grab.view->beginDragPhysics(grab.offsetX, grab.offsetY);
