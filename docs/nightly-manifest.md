@@ -33,7 +33,7 @@ Every row is merged. A row's `State` names the resolutions it needs on replay, n
 
 ## Conflicts
 
-Ownership is decided against `upstream/main`, not against this branch. A collision is **branch-owned** when the branch also fails to merge into `upstream/main`: that branch is stale against the base it targets, and the fix belongs on it. A branch that merges into `upstream/main` cleanly is **fresh**, so the collision it makes here is between two accepted changes and is this branch's job to union. C1, C2, C6, C8, C9, C10, C11, C12, C13, C14 and C15 are fresh-side unions and this branch resolves them; C3, C4 and C5 were stale branches and were fixed at their owners; C7 was fixed at #806.
+Ownership is decided against `upstream/main`, not against this branch. A collision is **branch-owned** when the branch also fails to merge into `upstream/main`: that branch is stale against the base it targets, and the fix belongs on it. A branch that merges into `upstream/main` cleanly is **fresh**, so the collision it makes here is between two accepted changes and is this branch's job to union. C1, C2, C6, C8, C9, C10, C11, C14, C15 and C17 are fresh-side unions and this branch resolves them; C3, C4 and C5 were stale branches and were fixed at their owners; C7 was fixed at #806.
 
 A branch-owned conflict stops the rebuild: write the report, leave the branch at the last clean merge, push nothing. That happened once in this round's preparation: `feat/resize-physics` @ `58260d32` no longer merged into `01a7828f` because upstream `2a6f837e` removed the scratchpad presentation from `View::setMaximized`, and the branch was rebased to `38d4bf31` rather than resolved here. A `resolve:` commit here is the recorded fallback only when the owner agrees it is mechanical, and it is replaced by the rebase once the owner lands one.
 
@@ -81,12 +81,12 @@ Rebased onto `ce2d8eed`; the conflicts are unions with earlier members. The coal
 
 ### C8 — 16 × 5, 14 and 19, six files (standing resolution, owned by this branch)
 
-`fix/resize-lag` was cut on `c89f6771`, so every file it touches that a later member also touched collides. All hunks are unions; two are **duplicates**:
+`fix/resize-lag` was rebased onto `ce2d8eed`. The overlapping resize-grab changes are unions; two are **duplicates**:
 
 - `src/view/view.cpp`, `src/view/view_state.cpp` — take **ours**, the `cancelResizeGrab();` call. Their side inlines the same guard plus `cursor->resetMode()`, which is exactly what `View::cancelResizeGrab()` (row 14) expands to.
 - `src/view/view_floating.cpp` — both functions were added at the same place: keep `View::cancelResizeGrab()` and `View::applyFloatingResize()`, each with its own body.
 - `src/input/cursor.h` — union the `ResizeGrab` fields: the `physics` flag (row 14) and the pending box/position (row 16).
-- `src/input/cursor.cpp` — the release flushes the branch's pending box first, then ends the sheet and finishes the presentation: `flushResizeTarget();` before `if (floatingResize->physics) { endResizePhysics(); }` and `finishFloatingResize();`.
+- `src/input/cursor.cpp` — the release flushes the pending box first, calls `finishFloatingResize()` to record whether the configure is outstanding, and then calls `endResizePhysics()` for a physics grab.
 - `src/view/view_lifecycle.cpp`, `View::handleCommit` — union, both closing braces. Ours syncs the adaptive title bar; theirs fires `resizeTrace::commit(*this)`. The trace stays **after** the ssd sync and inside the same `if`-chain as `hadResizeRequest`.
 - `tests/harness/clients/unmap_client.cpp` — union. Take their `const ssize_t bytesRead = read(...)` binding and `bytesRead > 0` test, but keep **our** `&& state.mapped` repaint guard and the whole `b`/`t` command set with `repaintBodyOnly` / `repaintBandOnly` / `topBandEnabled` / `topBandSplit`.
 
@@ -94,7 +94,7 @@ Falsification, honestly reported: removing `flushResizeTarget()` leaves `animati
 
 ### C9 — 17 × 3, 4 and 12, three files (standing resolution, owned by this branch)
 
-`feat/scratchpad-restore-fade` is cut on `01a7828f` and predates the minimize timeline (row 4) and the blur-strength row (row 3). It no longer carries the empty-pad feature, so the passive-backdrop sentences and the `transient/modal_follow` adjustment of the previous round are gone; only the restore fade remains. All hunks are unions.
+`feat/scratchpad-restore-fade` is rebased on `ce2d8eed` and predates the minimize timeline (row 4) and the blur-strength row (row 3). It no longer carries the empty-pad feature, so the passive-backdrop sentences and the `transient/modal_follow` adjustment of the previous round are gone; only the restore fade remains. All hunks are unions.
 
 - `docs/user/animation.md` — keep **our** event table, which carries `windows_minimize`, `physics` on `windows_resize` and `blur_strength` on `scratchpad`, and take only their scratchpad transition cell: `Scratchpad show and hide, a window leaving for its workspace, and its backdrop`. Re-pad with the formatter, which widens the third column.
 - `src/view/view.h` — union. Their `beginScratchpadRestoreFade` keeps its position right after `animateFadeTo`; our minimize cluster follows it verbatim.
