@@ -952,6 +952,7 @@ namespace umbriel {
     }
     const double dim = config().animation.scratchpad.dim;
     const bool blurEnabled = config().animation.scratchpad.blur && config().appearance.blur.enabled;
+    const auto blurStrength = static_cast<float>(config().animation.scratchpad.blurStrength);
     // The fade follows every shown pad so a non-modal pad can still animate its windows; only a modal pad dims, and it
     // keeps dimming while its backdrop fades out.
     const float currentAlpha = backdropFade(output);
@@ -984,6 +985,8 @@ namespace umbriel {
         wlr_scene_blur_set_size(blur, box.width, box.height);
         wlr_scene_blur_set_corner_radius(blur, 0);
         wlr_scene_blur_set_alpha(blur, std::clamp(currentAlpha, 0.0F, 1.0F));
+        // The fade moves alpha alone; strength stays independent of it.
+        wlr_scene_blur_set_strength(blur, blurStrength);
         wlr_scene_node_set_enabled(&blur->node, true);
       }
     }
