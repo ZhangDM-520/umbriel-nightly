@@ -680,6 +680,7 @@ namespace umbriel {
   }
 
   void View::finishFloatingResize() {
+    const bool pointerResize = sizeGrabTracksPointer();
     m_floating.endResize();
     const auto pending = m_floating.pendingSize();
     const bool queued = m_floatingSizeConfigure
@@ -698,6 +699,7 @@ namespace umbriel {
       syncXwaylandConfigure();
     }
     m_xwaylandResizeConfigurePending = false;
+    m_pointerResizeSettling = pointerResize && m_floatingSizeConfigure.has_value();
   }
 
   void View::syncFloatingResizePosition() {

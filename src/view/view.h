@@ -1063,6 +1063,7 @@ namespace umbriel {
     std::optional<FloatingSizeConfigure> m_floatingSizeConfigure;
     bool m_deferXwaylandConfigure = false;
     bool m_xwaylandResizeConfigurePending = false;
+    bool m_pointerResizeSettling = false;
     // applyPresentedCrop programmed the buffer; the surface clip alone no longer describes it.
     bool m_presentedCropActive = false;
     std::optional<std::string> m_xdgTag;
