@@ -12,16 +12,16 @@ The 2026-11-25 replay integrates 22 members on `upstream/main` at `ce2d8eed`. Ev
 | 4  | `floating-minimize-animation`         | #733                  | `minimize`   | **C1, C2**        | standing resolutions below                                                                    |
 | 5  | `titlebar-adaptive-color`             | #735                  | `titlebar`   | merged            | shares `view_lifecycle.cpp` with 16                                                           |
 | 6  | `render-scale`                        | #573                  | `render`     | merged            |                                                                                               |
-| 7  | `downsample-box`                      | #575                  | `render`     | merged            | builds on 6                                                                                   |
+| 7  | `downsample-box`                      | #575                  | `render`     | **C17**           | builds on 6                                                                                   |
 | 8  | `background-blur-protocol`            | #715                  | `blur`       | merged            | C3 resolved by rebase on 2026-11-19                                                           |
 | 9  | `fix/drag-deform-settle-crop`         | #570                  | `drag`       | merged            | C4 resolved by rebase on 2026-11-19                                                           |
 | 10 | `fix/drag-blur-latency`               | #837                  | `drag`       | merged            | ancestor of 11                                                                                |
 | 11 | `fix/drag-physics-scalability`        | #840                  | `drag`       | merged            | shares `effect_registry.cpp` with 14                                                          |
 | 12 | `upstream-rejected`                   | closed #559/#560/#713 | —            | merged            | shares `view_animation.cpp` with 4                                                            |
 | 13 | `fix/vram-footprint`                  | #844                  | `render`     | merged            | C5 resolved in place by #844                                                                  |
-| 14 | `feat/resize-physics`                 | —                     | `drag`       | **C6, C8**        | rebased onto `1b2f89fa`; ships `drag/resize_physics`                                          |
+| 14 | `feat/resize-physics`                 | —                     | `drag`       | **C6, C8**        | rebased onto `ce2d8eed`; ships `drag/resize_physics`                                          |
 | 15 | `fix/ram-footprint`                   | —                     | `render`     | merged            | restacked on 13                                                                               |
-| 16 | `fix/resize-lag`                      | —                     | `drag`       | **C8, C14**       | cut on `c89f6771`; still four hunks                                                           |
+| 16 | `fix/resize-lag`                      | —                     | `drag`       | **C8, C14**       | rebased onto `ce2d8eed`; overlaps resize physics                                              |
 | 17 | `feat/scratchpad-restore-fade`        | —                     | `scratchpad` | **C9, C15**       | one commit; the empty-pad feature was dropped                                                 |
 | 18 | `fix/overview-scratchpad-fade`        | #898                  | `scratchpad` | **C10, C15**      | refreshed for per-window border effects                                                       |
 | 19 | `feat/scratchpad-drop-adopt`          | —                     | `scratchpad` | **C11, C14, C15** | stacked on 17; four commits                                                                   |
@@ -70,9 +70,9 @@ void View::cancelFadeAnimation() {
 
 `background-blur-protocol` and `fix/drag-deform-settle-crop` were rebased onto the base on 2026-11-19, and `fix/vram-footprint` merged `fix/drag-physics-scalability` so it carries its own resolution. A rebuild merges them and applies nothing.
 
-### C6 — 14 × this branch, seven files, one hunk each (standing resolution, owned by this branch)
+### C6 — 14 × this branch, resize physics union (standing resolution, owned by this branch)
 
-Rebased onto `1b2f89fa`, so the `view_state.cpp` conflict the previous round reported is gone; each hunk is now a union with an earlier member.
+Rebased onto `ce2d8eed`; the conflicts are unions with earlier members. The coalescing merge also retains `m_pointerResizeSettling` and its assignment in `finishFloatingResize` so resize physics waits for the outstanding configure.
 
 - `view_lifecycle.cpp`: its `resetDragPhysics()` is a strict superset of the bare `m_dragPhysics = DragPhysics{}` (it also clears `m_dragResizeEdges` and unbinds the drag slot). Take its call, drop the bare assignment, and run #570's deferred re-home after it.
 - `view.cpp`, `view_state.cpp`: it calls `cancelResizeGrab()` exactly where we call `flushReleaseRehome()` or `abandonMinimizeTransition()`. Union all of them; in `setFullscreen`, keep the minimize abandon block and the resize-grab block side by side.
@@ -198,5 +198,5 @@ Two host traps make the local gate narrower than its recipe: `tests/eis-socket-t
 - A force-pushed member costs nothing: that is what the rebuild lifecycle is for.
 - `Owner` names the thread that maintains the branch, not a person. The standing ownership contract — surface, gate, conflict shape, decision log — is `docs/branch-ownership.md`, committed beside this file by the same bookkeeping commit, because a rebuild starts from `upstream/main` and neither file exists there.
 - A member that lands upstream is deleted from this table outright; do not keep its row as history. #745 and #820 went that way.
-- A row stacked on another must follow it: row 19 is cut on row 17, so merging it after row 17 keeps its merge base inside this branch and only the C11, C12 and C14 hunks can collide.
+- A row stacked on another must follow it: row 19 is cut on row 17, so merging it after row 17 keeps its merge base inside this branch and the scratchpad and resize guards retain their documented unions.
 - A collision is judged against `upstream/main`, not against this branch. Merge the member into `upstream/main` with `git merge-tree --write-tree`; a clean result makes the branch fresh and the collision here ours to union, and a colliding result makes it stale and sends the fix to its owner. A branch based on an older commit is still fresh if that merge is clean.

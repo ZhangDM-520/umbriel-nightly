@@ -29,7 +29,7 @@ gap = 0
 
 [layout.scrolling]
 default_extent_fraction = 0.5
-center_underfull_strip = false
+underfull_strip = "start"
 
 [animation]
 enabled = true
