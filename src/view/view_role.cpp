@@ -126,6 +126,8 @@ namespace umbriel {
       m_xFullscreenSize.reset();
       wlr_xwayland_surface_set_fullscreen(m_xsurface, fullscreen);
     }
+    // The fullscreen policy may change the scale hint, so send it before the configure.
+    refreshScaleHints();
     syncSsdFrame();
   }
 
@@ -138,6 +140,7 @@ namespace umbriel {
       wlr_xwayland_surface_set_maximized(m_xsurface, maximized, maximized);
     }
     syncSsdFrame();
+    refreshStateRuleEffects();
   }
 
   void View::requestClose() {
@@ -266,6 +269,14 @@ namespace umbriel {
     return surface->configure_idle != nullptr || surface->current.configure_serial != surface->scheduled_serial;
   }
 
+  bool View::configureAcknowledged() const {
+    if (m_toplevel == nullptr) {
+      return true;
+    }
+    const wlr_xdg_surface* surface = m_toplevel->base;
+    return surface->configure_idle == nullptr && surface->pending.configure_serial == surface->scheduled_serial;
+  }
+
   bool View::configureSettled(uint32_t serial) const {
     return m_toplevel == nullptr || serialSettled(m_toplevel->base->current.configure_serial, serial);
   }
@@ -282,8 +293,12 @@ namespace umbriel {
     }
     const bool settled = m_floating.retireSizeRequestIfSettled(sent.serial);
     if (settled) {
+      const bool pointerResizeSettled = m_pointerResizeSettling;
       m_floatingSizeConfigure.reset();
       m_pointerResizeSettling = false;
+      if (pointerResizeSettled && m_dragResizeEdges != DragPhysics::ResizeEdge::None) {
+        endResizePhysics();
+      }
       resetPresentedSurface();
     }
     return settled;

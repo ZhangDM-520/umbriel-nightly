@@ -19,6 +19,7 @@ default_workspace = 2
 | `match.layout`                | Match the window's workspace layout: `"scrolling"`, `"dwindle"`, `"master"`, or `"stacking"`. |
 | `match.is_focused`            | Match current focus state.                                                                    |
 | `match.is_floating`           | Match current floating state.                                                                 |
+| `match.is_maximized`          | Match current maximized state.                                                                |
 | `match.is_maximized_to_edges` | Match current maximized-to-edges state.                                                       |
 | `match.is_pinned`             | Match current pinned state.                                                                   |
 | `match.is_scratchpad`         | Match current scratchpad state.                                                               |
@@ -182,6 +183,8 @@ Add `default_column_display = "tabbed"` to keep such a column as [tabs](layout.m
 
 ## Settings updated while a window is open
 
+The `supersample` rule chooses whether a window uses its output's `render_scale`. It overrides the fullscreen and content-type defaults, including the output's `supersample_fullscreen` setting. Use `supersample = false` to reduce rendering cost for a 3D application in every window state. See [Supersampling with `render_scale`](outputs.md#supersampling-with-render_scale).
+
 | Key                       | Description                                                                                                                                                                                                                                                            |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `dim_behind`              | Darken content below this window on its output; `0.0`–`1.0`, default `0.0`.                                                                                                                                                                                            |
@@ -206,6 +209,7 @@ Add `default_column_display = "tabbed"` to keep such a column as [tabs](layout.m
 | `outer_border_width`      | Override `appearance.outer_border_width`, 0 to 100.                                                                                                                                                                                                                    |
 | `title_bar`               | `"on"` follows client decoration preferences, `"negotiated"` requires Wayland decoration negotiation selecting server-side decorations, `"forced"` forces a title bar, and `"off"` hides it. Overrides `appearance.title_bar.mode`; omission inherits the global mode. |
 | `title_bar_buttons`       | Title bar buttons for this window, from the title outward: any of `"minimize"`, `"maximize"`, and `"close"`, or `[]` for none. Overrides `appearance.title_bar.buttons`; omission inherits it.                                                                         |
+| `title_bar_color_source`  | `"fixed"`, `"window"`, or `"average"`, applying to this window instead of `appearance.title_bar.color_source`; omission inherits it. Use it to give the adaptive bar only to the windows that need it.                                                                 |
 | `corner_radius`           | Override `appearance.corner_radius`, 0 to 100.                                                                                                                                                                                                                         |
 | `shadow`                  | Override `appearance.shadow.enabled`.                                                                                                                                                                                                                                  |
 | `border_effect`           | Replace `effects.border` with a border preset or pool, or `"off"` to disable it.                                                                                                                                                                                       |
@@ -258,6 +262,8 @@ title_bar = "on"
 ```
 
 This also covers manually floating windows in stacking, without enabling bars on floating windows in other layouts.
+
+`title_bar_color_source` sets [`color_source`](appearance.md#title-bar) for one window, so the bar can take its colour from the window's own top edge only where that helps — a program with an ugly header bar, or a Wine application — while terminals and editors keep the palette. It works in both directions: `"window"` or `"average"` opts a window in over a global `"fixed"`, and `"fixed"` exempts one from a global `"window"`. A later matching rule replaces an earlier override, while a rule that omits the key leaves one in place.
 
 An omitted `title_bar` inherits `[appearance.title_bar] mode`. An explicit `title_bar = "on"` follows the client's decoration preference, or shows Umbriel's bar if no preference is known. Use `"negotiated"` to show it only when Wayland decoration negotiation selects server-side decorations, `"forced"` to force a bar, or `"off"` to hide it. Both `"on"` and `"negotiated"` follow managed Xwayland windows' decoration hints. Rules override every global mode: `"forced"` can enable a bar with global `"off"`, and `"on"` can honor CSD requests with global `"forced"`. A later matching `"on"` or `"negotiated"` rule replaces an earlier override with its corresponding decoration policy. Changes apply to existing windows, including state-based rules and config reloads. Fullscreen and tiled tab groups still suppress the bar.
 

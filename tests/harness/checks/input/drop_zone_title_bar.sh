@@ -10,6 +10,10 @@ drop_zones = true
 [animation]
 duration_ms = 2000
 curve = "linear"
+# This check measures the snapped restore box before the client acknowledges it.
+[animation.windows_resize]
+enabled = false
+
 [animation.windows_in]
 enabled = false
 [appearance]

@@ -28,7 +28,7 @@ namespace umbriel {
                   errorAt(node.source(), "{} must be a string", path);
                 } else if (name->empty()) {
                   errorAt(node.source(), "{} must not be empty", path);
-                } else if (*name == "default") {
+                } else if (*name == kImplicitScratchpad) {
                   errorAt(node.source(), "{} 'default' is reserved for the implicit scratchpad", path);
                 } else {
                   target.name = *name;
@@ -205,6 +205,7 @@ namespace umbriel {
           ),
           strict(boolean("is_focused", &W::matchFocused)),
           strict(boolean("is_floating", &W::matchFloating)),
+          strict(boolean("is_maximized", &W::matchMaximized)),
           strict(boolean("is_maximized_to_edges", &W::matchMaximizedToEdges)),
           strict(boolean("is_pinned", &W::matchPinned)),
           strict(boolean("is_scratchpad", &W::matchScratchpad)),
@@ -241,6 +242,7 @@ namespace umbriel {
           boolean("background_render", &W::backgroundRender),
           boolean("block_capture", &W::blockCapture),
           boolean("tearing", &W::allowTearing),
+          boolean("supersample", &W::supersample),
           boolean("blur", &W::blur),
           boolean("blur_popups", &W::blurPopups),
           boolean("blur_optimized", &W::blurOptimized),
@@ -257,6 +259,7 @@ namespace umbriel {
                {"forced", TitleBarMode::Forced},
                {"off", TitleBarMode::Off}}
           ),
+          registry::choice("title_bar_color_source", &W::titleBarColorSource, titleBarColorSources()),
           registry::custom<W>(
               "title_bar_buttons", registry::KeyDescription("string_array").withValues(titleBarButtonNames()),
               [](const toml::node& node, const std::string& path, W& target, registry::ReadContext&) {
@@ -385,6 +388,7 @@ namespace umbriel {
           registry::boolean("blur_popups", &L::blurPopups),
           registry::real("blur_ignore_alpha", 0.0, 1.0, &L::ignoreAlpha),
           registry::boolean("blur_optimized", &L::optimized),
+          registry::boolean("supersample", &L::supersample),
       };
       return fields;
     }

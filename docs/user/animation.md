@@ -47,6 +47,7 @@ enabled = true
 curve = "spring:1,800"
 dim = 0.8
 blur = false
+blur_strength = 1.0
 
 [animation.dialogs]
 enabled = true
@@ -76,39 +77,36 @@ Each event other than `windows_drag` also accepts `enabled`, `duration_ms`, and 
 
 ## Event tables
 
-| Table                         | Additional fields                                                   | Transition                                                 |
-| ----------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `[animation.windows_in]`      | `style`, `scale`                                                    | Window opening                                             |
-| `[animation.windows_out]`     | `style`, `scale`                                                    | Window closing                                             |
-| `[animation.windows_move]`    | none                                                                | Position during moves, reflow, maximize, and restore       |
-| `[animation.windows_resize]`  | `wait_for_redraw`, and no `effect`                                  | Size during the same changes                               |
-| `[animation.windows_opacity]` | none, and no `effect`                                               | Focus changes to window-rule opacity and backdrop blur     |
-| `[animation.workspaces]`      | `style`                                                             | Workspace switching                                        |
-| `[animation.overview]`        | `workspace_curve`                                                   | Overview opening, closing, and filmstrip movement          |
-| `[animation.scratchpad]`      | `dim`, `blur`                                                       | Scratchpad show and hide, and its backdrop                 |
-| `[animation.dialogs]`         | `dim`, and no `effect`                                              | Shade over a window while a modal dialog is attached to it |
-| `[animation.border]`          | none                                                                | Focus-border color                                         |
-| `[animation.dim_unfocused]`   | `dim`                                                               | Unfocused-window opacity                                   |
-| `[animation.layers]`          | none                                                                | Layer-shell map and unmap                                  |
-| `[animation.windows_drag]`    | `physics` (default `false`) plus the drag-physics tuning keys below | Drag physics                                               |
+| Table                          | Additional fields                                                   | Transition                                                                     |
+| ------------------------------ | ------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `[animation.windows_in]`       | `style`, `scale`                                                    | Window opening                                                                 |
+| `[animation.windows_out]`      | `style`, `scale`                                                    | Window closing                                                                 |
+| `[animation.windows_minimize]` | `style`, `scale`, `anchor`, and no `effect`                         | Floating window minimizing and restoring                                       |
+| `[animation.windows_move]`     | none                                                                | Position during moves, reflow, maximize, and restore                           |
+| `[animation.windows_resize]`   | `physics`, and no `effect`                                          | Size during the same changes                                                   |
+| `[animation.windows_opacity]`  | none, and no `effect`                                               | Focus changes to window-rule opacity and backdrop blur                         |
+| `[animation.workspaces]`       | `style`                                                             | Workspace switching                                                            |
+| `[animation.overview]`         | `workspace_curve`                                                   | Overview opening, closing, and filmstrip movement                              |
+| `[animation.scratchpad]`       | `dim`, `blur`, `blur_strength`                                      | Scratchpad show and hide, a window leaving for its workspace, and its backdrop |
+| `[animation.dialogs]`          | `dim`, and no `effect`                                              | Shade over a window while a modal dialog is attached to it                     |
+| `[animation.border]`           | none                                                                | Focus-border color                                                             |
+| `[animation.dim_unfocused]`    | `dim`                                                               | Unfocused-window opacity                                                       |
+| `[animation.layers]`           | none                                                                | Layer-shell map and unmap                                                      |
+| `[animation.windows_drag]`     | `physics` (default `false`) plus the drag-physics tuning keys below | Drag physics                                                                   |
+
+`windows_minimize` accepts `popin` or `fade`. `popin` scales the window to `scale` while it fades; `fade` leaves its geometry alone. `anchor` picks where a `popin` collapse goes: `"center"` keeps the window's own centre, `"left"` and `"right"` put the scaled box on that edge of the output's usable area at its vertical middle, and `"top_center"` and `"bottom_center"` put it on that edge at its horizontal middle. The restore plays the same timeline in reverse, so a window grows back from exactly where it left. Animation time is spent on the live window: `minimized`, `visible`, focus handoff, and taskbars change at once, while the window is still leaving. A workspace switch or an overview reopening mid-fade can therefore still draw it for the rest of the timeline. A fading window takes no pointer input. Custom effects do not apply here, because a transition animates one of the fixed event slots and minimize has none of its own.
 
 `windows_in` accepts `popin`, `zoom`, `slide`, `fade`, or `none`. `windows_out` accepts `fade`, `slide`, `popin`, or `zoom`. `workspaces` accepts `slide` or `reveal` (see [Workspace reveal](#workspace-reveal)). `scale` applies to `popin`: an opening window grows from it to full size, and a closing window shrinks toward it, while both fade.
 
-`windows_move` moves a window while `windows_resize` changes its size, so a slow move can still resize quickly. While the size animates, the window's latest frame is stretched to fit. With `windows_resize` disabled, the size changes at once while the window still moves. When the two timelines differ, a window can briefly overlap its neighbours during a reflow. Borders and shadows follow the layout's size even when the application has not redrawn yet; a tiled window that settles smaller than its tile, such as a terminal sized to whole character cells, leaves a transparent strip inside its border.
+`windows_move` moves a window while `windows_resize` changes its size, so a slow move can still resize quickly. While the size animates, the window's latest frame is stretched to fit. With `windows_resize` disabled, the size changes at once while the window still moves. When the two timelines differ, a window can briefly overlap its neighbours during a reflow. Borders and shadows follow the layout's size even when the application has not redrawn yet. A tiled window that settles smaller than its tile, such as a terminal sized to whole character cells or a browser popup that sizes itself, keeps its own size and is centered in the tile, leaving a transparent margin inside its border.
 
-A client needs a few frames to redraw at a new size, so with `windows_resize` disabled its previous frame is briefly stretched to the new size. Set `wait_for_redraw = true` to make a layout change that resizes windows a single switch instead: the screen keeps showing every window as it was, with a newly opened window not yet visible, until each resized window has redrawn, at its new size or at a nearby size it picks itself, as terminals that size to whole character cells do; then every window appears in its final place and size in the same frame, without moving there. Layout changes that only move windows still animate with `windows_move`. Resizing a tile with the mouse works the same way, one step at a time: each step waits for the resized windows to redraw before the next one follows the pointer, so the edge may trail a fast drag slightly, but no window is ever stretched or squeezed. A slow or unresponsive client is waited for at most 150 ms, after which the switch happens anyway and that window's frame is stretched until it redraws. It is off by default. `wait_for_redraw` only applies while the size does not animate: with `windows_resize` or all animation disabled.
-
-```toml
-[animation.windows_resize]
-enabled = false
-wait_for_redraw = true
-```
-
-When a tiled window closes while `windows_out` is disabled, its last frame stays on screen until the switch, so the wallpaper never shows in the space it leaves.
+When a tiled window closes while `windows_out` is disabled, its last frame stays on screen until the windows filling its space have redrawn, so the wallpaper never shows there.
 
 `animation.overview.workspace_curve` controls filmstrip movement after wheel, keyboard, and touchpad navigation. A released touchpad gesture keeps the speed the fingers had when its curve is a spring: `[animation.workspaces]` for the three-finger switch, `[animation.overview]` for the four-finger open and close, and `workspace_curve` for the filmstrip. Any other curve starts from rest.
 
-Scratchpad `dim` and `blur` remain active without a fade when animation is disabled. `dim` is the opacity of the black layer over the output behind a visible scratchpad; `blur` blurs it when `[appearance.blur]` is enabled.
+Scratchpad `dim` and `blur` remain active without a fade when animation is disabled. `dim` is the opacity of the black layer over the output behind a visible scratchpad; `blur` blurs it when `[appearance.blur]` is enabled, and `blur_strength` scales that blur from 0.0 to 1.0, where 1.0 is the renderer's base strength. The fade moves blur alpha alone, so strength holds steady through a show or hide unless you set it yourself.
+
+A window leaving a scratchpad for a workspace fades in there over the same curve that hid it, starting transparent even when the pad was on screen. A silent move to a workspace that is not active, and a restore that an output loss or a removed `[[scratchpad]]` performs, show the window at full opacity instead.
 
 Dialogs `dim` works the same way: it is the opacity, 0.0 to 1.0 and `0.3` by default, of the black shade over a window while a modal dialog is attached to it (see [Dialogs](layout.md#dialogs)). The shade fades in when the dialog attaches and out when it leaves, and stays without a fade when animation is disabled.
 
@@ -193,7 +191,7 @@ Adjust `/usr` for the package prefix. Defining your own preset, the shader inter
 
 ### Targets
 
-`windows_in`, `windows_out`, `windows_move`, and `dim_unfocused` process the window and its subsurfaces as one target; `border` processes the ring alone. `scratchpad` covers the window's show and hide fade and the dim and blur backdrops. `layers` covers a layer-shell surface's own tree. `workspaces` and `overview` process whole workspace or overview trees, so they see the results of inner effects. Effects composite descendants before ancestors.
+`windows_in`, `windows_out`, `windows_move`, and `dim_unfocused` process the window and its subsurfaces as one target; `border` processes the ring alone. `scratchpad` covers the window's show and hide fade, the fade of a window leaving the pad for its workspace, and the dim and blur backdrops. `layers` covers a layer-shell surface's own tree. `workspaces` and `overview` process whole workspace or overview trees, so they see the results of inner effects. Effects composite descendants before ancestors.
 
 ## Drag physics
 
@@ -222,6 +220,8 @@ The tuning keys shape the sheet; out-of-range values are clamped to their range 
 | `settle_after_pause_s` | 0.25    | 0.1 to 5.0     | Rendering pause after which the sheet snaps back to rest. Ordinary frames never trigger it at any refresh rate. |
 
 Only the window's own content deforms; its drop shadow follows that deformation within the window's shadow bounds. Re-grabbing a window while it settles continues its motion. Under the default `popin` style, or under `zoom`, the closing snapshot's clip grows by the deformation margin, so a client-side decoration extending past the window's geometry can remain visible within that margin while the snapshot fades.
+
+Setting `physics = true` under `[animation.windows_resize]` (default `false`) applies the same elastic sheet to floating pointer resizes (tiled resizes stay rigid). It pins the opposite corner on a corner grab or the midpoint of the opposite edge on a straight-edge grab, loads the sheet from each committed size step of the window so the dragged edge trails the growth and relaxes after release, shares the tuning keys under `[animation.windows_drag]`, and runs whenever `[animation] enabled` is true—even if `[animation.windows_resize] enabled = false` (which governs layout-driven size animations).
 
 ## Workspace reveal
 

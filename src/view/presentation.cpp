@@ -96,7 +96,8 @@ namespace umbriel {
   }
 
   void ViewPresentation::updateFullscreen(
-      bool fullscreen, int tileWidth, int tileHeight, wlr_scene_node* surfaceNode, const wlr_box& geometry
+      bool fullscreen, int tileWidth, int tileHeight, wlr_scene_node* surfaceNode, const wlr_box& geometry,
+      int centeredWidth, int centeredHeight
   ) {
     const bool validSize = tileWidth > 0 && tileHeight > 0;
     m_fullscreenSized = fullscreen && validSize;
@@ -113,27 +114,29 @@ namespace umbriel {
       m_contentCentered = m_offsetX != 0 || m_offsetY != 0;
       return;
     }
-    m_offsetX = 0;
-    m_offsetY = 0;
-    if (!fullscreen && m_contentCentered) {
+    m_offsetX = centeredWidth > 0 && validSize ? std::max(0, (tileWidth - centeredWidth) / 2) : 0;
+    m_offsetY = centeredHeight > 0 && validSize ? std::max(0, (tileHeight - centeredHeight) / 2) : 0;
+    const bool centered = m_offsetX != 0 || m_offsetY != 0;
+    if (!fullscreen && (centered || m_contentCentered)) {
       if (surfaceNode != nullptr) {
-        wlr_scene_node_set_position(surfaceNode, -geometry.x, -geometry.y);
+        wlr_scene_node_set_position(surfaceNode, m_offsetX - geometry.x, m_offsetY - geometry.y);
       }
-      m_contentCentered = false;
+      m_contentCentered = centered;
     }
   }
 
   // Buffer crop
   void ViewPresentation::applyCrop(
       wlr_scene_tree* tree, wlr_surface* surface, const wlr_box& geometry, const wlr_box& content,
-      const wlr_box& surfaceClip
+      const wlr_box& surfaceClip, ShrinkSampling shrink
   ) const {
     struct Ctx {
       wlr_surface* surface;
       const wlr_box* geometry;
       const wlr_box* content;
       const wlr_box* clip;
-    } ctx{surface, &geometry, &content, &surfaceClip};
+      ShrinkSampling shrink;
+    } ctx{surface, &geometry, &content, &surfaceClip, shrink};
 
     wlr_scene_node_for_each_buffer(
         &tree->node,
@@ -150,7 +153,8 @@ namespace umbriel {
           int width = 0;
           int height = 0;
           wlr_scene_surface_get_size(sceneSurface, &width, &height);
-          const wlr_fbox src = croppedSourceBox(base, *ctx.geometry, *ctx.content, *ctx.clip, width, height);
+          const wlr_fbox src =
+              croppedSourceBox(base, *ctx.geometry, *ctx.content, *ctx.clip, width, height, ctx.shrink);
           if (src.width <= 0 || src.height <= 0) {
             return;
           }
@@ -178,6 +182,37 @@ namespace umbriel {
         },
         surface
     );
+  }
+
+  wlr_box minimizeCollapseBox(const wlr_box& resting, double scale, const wlr_box& usable, MinimizeAnchor anchor) {
+    const double factor = std::clamp(scale, 0.0, 1.0);
+    wlr_box collapsed = resting;
+    collapsed.width = std::max(1, static_cast<int>(std::lround(resting.width * factor)));
+    collapsed.height = std::max(1, static_cast<int>(std::lround(resting.height * factor)));
+    switch (anchor) {
+    case MinimizeAnchor::Center:
+      // The scaled box keeps the resting centre.
+      collapsed.x = resting.x + (resting.width - collapsed.width) / 2;
+      collapsed.y = resting.y + (resting.height - collapsed.height) / 2;
+      break;
+    case MinimizeAnchor::Left:
+      collapsed.x = usable.x;
+      collapsed.y = usable.y + (usable.height - collapsed.height) / 2;
+      break;
+    case MinimizeAnchor::Right:
+      collapsed.x = usable.x + usable.width - collapsed.width;
+      collapsed.y = usable.y + (usable.height - collapsed.height) / 2;
+      break;
+    case MinimizeAnchor::TopCenter:
+      collapsed.x = usable.x + (usable.width - collapsed.width) / 2;
+      collapsed.y = usable.y;
+      break;
+    case MinimizeAnchor::BottomCenter:
+      collapsed.x = usable.x + (usable.width - collapsed.width) / 2;
+      collapsed.y = usable.y + usable.height - collapsed.height;
+      break;
+    }
+    return collapsed;
   }
 
 } // namespace umbriel

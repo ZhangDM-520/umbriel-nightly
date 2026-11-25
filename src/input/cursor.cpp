@@ -20,6 +20,7 @@
 #include "scene/quit_confirm.h"
 #include "scene/ssd_frame.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/size_hints.h"
 #include "view/view.h"
 // clang-format off
@@ -1086,6 +1087,16 @@ namespace umbriel {
     return workspace != nullptr && grab != nullptr && grab->workspace == workspace;
   }
 
+  bool Cursor::tiledResizeTargetValid(const TiledResizeGrab& grab) const {
+    return grab.workspace != nullptr
+        && grab.view != nullptr
+        && grab.session != nullptr
+        && grab.view->tiled()
+        && grab.view->workspace() == grab.workspace
+        && !grab.view->scheduledFullscreen()
+        && !grab.view->currentFullscreen();
+  }
+
   bool Cursor::beginMove(View* view, uint32_t button, bool deferUntilThreshold) {
     if (view == nullptr || !view->mapped() || button == 0) {
       return false;
@@ -1098,7 +1109,11 @@ namespace umbriel {
     bool tiled = view->tiled();
     if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
         scratchpad != nullptr && !tiled && scratchpad->contains(view)) {
+      const bool wasMaximized = view->maximizedToEdges() || view->floatingMaximized();
       view->restoreMaximizedForMove();
+      if (wasMaximized) {
+        view->setPosition(view->layoutTargetX(), view->layoutTargetY());
+      }
     }
 
     if (!tiled && (view->region() || view->floatingMaximized())) {
@@ -1183,7 +1198,7 @@ namespace umbriel {
   }
 
   bool Cursor::beginResize(View* view, uint32_t edges, uint32_t button) {
-    if (view == nullptr || !view->mapped() || button == 0) {
+    if (view == nullptr || !view->mapped() || button == 0 || view->scheduledFullscreen() || view->currentFullscreen()) {
       return false;
     }
     if (!isPassthrough()) {
@@ -1239,9 +1254,7 @@ namespace umbriel {
       return false;
     }
     setActiveConstraint(nullptr);
-    if (view->maximizedToEdges()) {
-      view->setMaximizedToEdges(false, false);
-    }
+    view->dropMaximizedForResize();
 
     const wlr_box& presented = view->presentedBox();
     const wlr_box geometry{view->layoutX(), view->layoutY(), presented.width, presented.height};
@@ -1259,6 +1272,7 @@ namespace umbriel {
     };
     m_grabButton = button;
     view->beginFloatingResize(edges);
+    std::get<FloatingResizeGrab>(m_grab).physics = view->beginResizePhysics(edges);
     updateInteractiveCursor(view);
     return true;
   }
@@ -1418,15 +1432,25 @@ namespace umbriel {
     }
     const auto* tiledResize = std::get_if<TiledResizeGrab>(&m_grab);
     Workspace* resizedWorkspace = tiledResize != nullptr ? tiledResize->workspace : nullptr;
-    const bool restoreResizePresentation = std::holds_alternative<FloatingResizeGrab>(m_grab);
-    if (std::holds_alternative<FloatingResizeGrab>(m_grab) && view != nullptr) {
-      view->finishFloatingResize();
+    const auto* floatingResize = std::get_if<FloatingResizeGrab>(&m_grab);
+    const bool restoreResizePresentation = floatingResize != nullptr;
+    if (floatingResize != nullptr && floatingResize->view != nullptr) {
+      flushResizeTarget();
+      floatingResize->view->finishFloatingResize();
+      if (floatingResize->physics) {
+        floatingResize->view->endResizePhysics();
+      }
     }
     m_toplevelDrag = false;
     m_grab = PassthroughGrab{};
     m_grabButton = 0;
     if (restoreDragPresentation && view != nullptr) {
       view->restoreHomePresentation();
+      // A pad action that ran during the drag skipped this window because the pointer carried it. The pad applies its
+      // own presentation again now that the pointer has let go, whichever way the action went.
+      if (ScratchpadManager* scratchpad = m_server->scratchpadManager()) {
+        scratchpad->refreshPresentation(*view);
+      }
       // A drag abandoned outside its drop path (session lock mid-drag, the
       // toplevel-drag detach endings) never runs finishFloatMove. Settle here
       // exactly like a drop: nothing else re-clamps where the drag parked the
@@ -1437,6 +1461,9 @@ namespace umbriel {
     }
     if (!liftedTabs.tabs.empty()) {
       landTabGroup(*view, liftedTabs, /*closing=*/!view->mapped());
+    }
+    if (view != nullptr) {
+      view->closeReleaseRehomeWindow();
     }
     // Resize scaling belongs to the grab, including every sibling tile it resizes. Clear it before restoring clips:
     // an unchanged clip otherwise keeps the scaled source/destination until the client commits again.
@@ -1469,9 +1496,7 @@ namespace umbriel {
     }
     const auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
     if (grab != nullptr
-        && (grab->workspace == nullptr
-            || grab->session == nullptr
-            || grab->session->ownerLayout() != &grab->workspace->layout())) {
+        && (!tiledResizeTargetValid(*grab) || grab->session->ownerLayout() != &grab->workspace->layout())) {
       resetMode();
     }
   }
@@ -1862,11 +1887,6 @@ namespace umbriel {
         return;
       }
       if (auto* grab = std::get_if<TiledResizeGrab>(&m_grab)) {
-        if (grab->deferred && grab->session != nullptr && grab->workspace != nullptr) {
-          grab->session->applyDelta(
-              m_cursor->x - grab->startX, m_cursor->y - grab->startY, grab->workspace->tiledArea()
-          );
-        }
         if (grab->workspace != nullptr) {
           if (grab->workspace->focusedView() == grab->view) {
             grab->workspace->reevaluateFocusedColumn();
@@ -3087,7 +3107,7 @@ namespace umbriel {
       const int width = view->floatingSize()[0];
       const double fraction = width > 0 ? std::clamp((grab.startX - view->layoutX()) / width, 0.0, 1.0) : 0.5;
       view->restoreMaximizedForMove();
-      view->clearRegion(false);
+      view->clearRegion(true);
       grab.preDragX = view->layoutTargetX();
       grab.preDragY = view->layoutTargetY();
       const auto restored = view->floatingSize();
@@ -3107,7 +3127,7 @@ namespace umbriel {
           grab.sourceWidth = grab.tabGroup.home.width;
         }
       }
-      grab.sourceWorkspace->layoutDetach(grab.view);
+      grab.sourceWorkspace->layoutDetach(grab.view, true);
     }
     grab.view->enterDragPresentation();
     grab.physics = grab.view->beginDragPhysics(grab.offsetX, grab.offsetY);
@@ -3288,6 +3308,38 @@ namespace umbriel {
     Output* destination =
         m_server->outputFromWlr(wlr_output_layout_output_at(m_server->outputLayout(), m_cursor->x, m_cursor->y));
     Workspace* workspace = dropWorkspace(*m_server, *view, destination);
+    // A pad showing on the drop output takes the window instead of the workspace underneath it. A member of a hidden
+    // pad has already left its pad with the pointer, so the visible pad adopts it; a member of a pad that is still
+    // showing roams with it instead. A lifted tab group would have to split its tabs and a pin gesture asked for
+    // pinning, so both keep the workspace drop.
+    if (ScratchpadManager* scratchpad = m_server->scratchpadManager(); scratchpad != nullptr
+        && destination != nullptr
+        && (!scratchpad->contains(view) || scratchpad->memberOfHiddenPad(view))
+        && grab->tabGroup.tabs.empty()
+        && grab->target != DragTarget::Pinned
+        && scratchpad->dropInto(view, destination, grab->sourceWorkspace, dropX, dropY)) {
+      resetMode();
+      m_server->focusView(view, FocusReason::DragDrop);
+      return;
+    }
+    // A member released while its pad is hidden leaves the pad with the pointer: the pad was closed under the drag, and
+    // the window must land where it was released rather than vanish with the pad. A visible pad follows the window
+    // instead, wherever it was dropped. The drop below places the window either way.
+    if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
+        scratchpad != nullptr && destination != nullptr && scratchpad->memberOfHiddenPad(view)) {
+      scratchpad->dropOut(view, destination);
+      for (View* tab : grab->tabGroup.tabs) {
+        if (tab != view && scratchpad->memberOfHiddenPad(tab)) {
+          scratchpad->dropOut(tab, destination);
+        }
+      }
+      // The window left its pad, so the drop now belongs to the workspace under the pointer: the grab still aims at
+      // the closed pad's layout, where the window is no longer a member. Recomputing may find no target at all, such
+      // as under a panel, so the workspace is set before the refinement rather than only by it.
+      workspace = dropWorkspace(*m_server, *view, destination);
+      grab->drop = DropTarget{.workspace = workspace};
+      updateDropTarget();
+    }
     if (grab->target == DragTarget::Tiled && workspace != nullptr && workspace->layoutMode() == LayoutMode::Stacking) {
       view->floatForStackingLayout();
     } else {
@@ -3472,7 +3524,11 @@ namespace umbriel {
 
   void Cursor::processResize() {
     auto* grab = std::get_if<FloatingResizeGrab>(&m_grab);
-    if (grab == nullptr || grab->view == nullptr) {
+    if (grab == nullptr
+        || grab->view == nullptr
+        || !grab->view->floating()
+        || grab->view->scheduledFullscreen()
+        || grab->view->currentFullscreen()) {
       resetMode();
       return;
     }
@@ -3520,7 +3576,32 @@ namespace umbriel {
       }
     }
 
-    grab->view->resizeFloating(newRight - newLeft, newBottom - newTop);
+    // The configure goes out now, so the client's latency is unchanged. The scene catches up in flushResizeTarget,
+    // once for however many events this frame carried: the presentation is a layout pipeline, and a 200 Hz pointer
+    // would otherwise run it 200 times a second.
+    const wlr_box target{newLeft, newTop, newRight - newLeft, newBottom - newTop};
+    grab->pending = target;
+    grab->pendingX = m_cursor->x;
+    grab->pendingY = m_cursor->y;
+    grab->pendingValid = true;
+    grab->view->requestFloatingResize(target);
+    grab->view->scheduleFrame();
+  }
+
+  void Cursor::flushResizeTarget() {
+    auto* grab = std::get_if<FloatingResizeGrab>(&m_grab);
+    if (grab == nullptr || !grab->pendingValid) {
+      return;
+    }
+    grab->pendingValid = false;
+    if (grab->view == nullptr || !grab->view->mapped()) {
+      return;
+    }
+    grab->view->applyFloatingResize(grab->pending);
+    // Recorded after applying, like the tiled step, so the trace reads the drawn box the frame will show.
+    resizeTrace::step(
+        "floating", grab->edges, grab->pendingX, grab->pendingY, grab->view->presentedBox(), grab->pending
+    );
   }
 
   void Cursor::revealClickedTile(View* view) {
@@ -3886,11 +3967,9 @@ namespace umbriel {
   void Cursor::processResizeTile() {
     auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
     if (grab == nullptr
-        || grab->workspace == nullptr
+        || !tiledResizeTargetValid(*grab)
         || grab->workspace->group() == nullptr
-        || grab->workspace->group()->output() == nullptr
-        || grab->view == nullptr
-        || grab->session == nullptr) {
+        || grab->workspace->group()->output() == nullptr) {
       resetMode();
       return;
     }
@@ -3898,26 +3977,29 @@ namespace umbriel {
       resetMode();
       return;
     }
-    // With windows_resize.wait_for_redraw each step is a held switch, like any other resizing reflow: the next step
-    // waits until the clients have redrawn at the last one, so no frame shows a buffer stretched to a box it was not
-    // drawn for.
-    const auto& animation = config().animation;
-    const bool lockstep = animation.windowsResize.waitsForClient(animation.enabled);
-    if (lockstep && grab->workspace->layoutMotionWaiting()) {
-      grab->deferred = true;
-      return;
-    }
-    grab->deferred = false;
     const wlr_box usable = grab->workspace->tiledArea();
     grab->session->applyDelta(m_cursor->x - grab->startX, m_cursor->y - grab->startY, usable);
     grab->view->setMaximizedState(false);
-    grab->workspace->markArrange(lockstep);
+    grab->tracePending = true;
+    grab->workspace->markArrange(false);
   }
 
-  void Cursor::resumeTiledResize(const Workspace* workspace) {
-    const auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
-    if (grab != nullptr && grab->workspace == workspace && grab->deferred) {
-      processResizeTile();
+  void Cursor::traceTiledResizeStep(const Workspace* workspace) {
+    auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
+    if (grab == nullptr || !grab->tracePending || grab->workspace != workspace || grab->view == nullptr) {
+      return;
+    }
+    grab->tracePending = false;
+    // Recorded after Workspace::arrange() updates presentation so drawn mirrors what the compositor just committed.
+    resizeTrace::step(
+        "tiled", grab->edges, m_cursor->x, m_cursor->y, grab->view->presentedBox(),
+        grab->workspace->presentedTiledBox(grab->view)
+    );
+  }
+
+  void Cursor::clearPendingTiledTrace(const Workspace* workspace) {
+    if (auto* grab = std::get_if<TiledResizeGrab>(&m_grab); grab != nullptr && grab->workspace == workspace) {
+      grab->tracePending = false;
     }
   }
 

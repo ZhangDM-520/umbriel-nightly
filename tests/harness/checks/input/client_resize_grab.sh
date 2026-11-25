@@ -38,7 +38,7 @@ enabled = false
 
 [layout.scrolling]
 default_extent_fraction = 0.35
-center_underfull_strip = false
+underfull_strip = "start"
 EOF
 "$UMBRIEL" msg config-reload > /dev/null
 
@@ -128,8 +128,9 @@ fi
 
 echo "client-requested tiled resize changed the layout and released input to its neighbor"
 
-# A client may acknowledge a configure without changing its buffer. A resize samples it and its resized sibling 1:1
-# while held and after release, without waiting for another client commit.
+# A client may acknowledge a configure without changing its buffer. Releasing a
+# resize must restore 1:1 sampling for it and its resized sibling without waiting
+# for another client commit.
 kill "$source_pid" "$target_pid"
 wait "$source_pid" "$target_pid" 2>/dev/null || true
 await_windows 0
@@ -144,7 +145,6 @@ read -r source_x source_y source_w source_h < <(window_box "$SOURCE")
 read -r target_x target_y target_w target_h < <(window_box "$TARGET")
 resize_start_x=$((target_x - 30))
 resize_y=$((source_y + 200))
-readonly HELD="$UMBRIEL_RUNTIME_DIR/resize-held.png"
 readonly RELEASED="$UMBRIEL_RUNTIME_DIR/resize-released.png"
 
 # Pixels in a 120px row that are neither of the pattern's exact colours, pure blue and pure green.
@@ -156,17 +156,18 @@ impure_pixels() {
 pointer_hold "$OUTPUT_W" "$OUTPUT_H" \
   move "$resize_start_x" "$resize_y" mod logo press 273 move "$((resize_start_x - 160))" "$resize_y" \
   -- release 273 mod none
-grim -o HEADLESS-1 "$HELD"
 pointer_release
 "$UMBRIEL" settle
 grim -o HEADLESS-1 "$RELEASED"
 read -r target_x target_y target_w target_h < <(window_box "$TARGET")
-for sample_x in "$((source_x + 40))" "$((target_x + 40))"; do
-  held_impure=$(impure_pixels "$HELD" "$sample_x")
-  released_impure=$(impure_pixels "$RELEASED" "$sample_x")
-  if (( held_impure != 0 || released_impure != 0 )); then
-    echo "resize sampling was not 1:1 at x=$sample_x: held=$held_impure released=$released_impure"
-    exit 1
-  fi
-done
-echo "fixed-buffer tiles sampled 1:1 through a resize and its release"
+# Release must not leave either tile scaled, without waiting for another client commit. This probe counts blended
+# pixels, so it proves "no leftover scaling" and not "a 1:1 crop was cleared": a periodic pattern of exact colours
+# samples exactly under a stale 1:1 crop too. The sampling decision itself — 1:1 under a grab, whole-frame for an
+# animation — is pinned by the `presented-crop` unit tests, and `resize_lag` pixel-probes what a held grab draws.
+released_source=$(impure_pixels "$RELEASED" "$((source_x + 40))")
+released_target=$(impure_pixels "$RELEASED" "$((target_x + 40))")
+if (( released_source != 0 || released_target != 0 )); then
+  echo "resize release left a tile scaled: source impure=${released_source}, target impure=${released_target}"
+  exit 1
+fi
+echo "resize release left no scaling on either fixed-buffer tile"

@@ -18,6 +18,7 @@
 #include <expected>
 #include <memory>
 #include <optional>
+#include <pixman.h>
 #include <span>
 #include <string>
 #include <string_view>
@@ -100,6 +101,8 @@ namespace umbriel {
     // True while the latest configure is still queued, or sent but not yet acknowledged and committed. Always false for
     // X11 windows, which acknowledge nothing.
     bool configureOutstanding() const;
+    // True once the latest configure has been sent and acknowledged, whether or not a commit has applied it yet.
+    bool configureAcknowledged() const;
     // True while the shared scene draws the window: its frame and every ancestor are enabled.
     bool presented() const;
     void updateDimBehind();
@@ -144,6 +147,10 @@ namespace umbriel {
     wlr_scene_tree* captureTree() const;
     bool captureBlocked() const { return m_captureBlocked; }
     void refreshCaptureProtection();
+
+    // The capture mirror scene carries its own downsample policy; keep it in
+    // step with the server's appearance.downsample.
+    void applyDownsampleMode(enum wlr_scene_downsample_mode mode);
     bool mapped() const { return m_mapped; }
     // The pid of the application process, or -1 when it is unknown (an X11 client that sets no _NET_WM_PID).
     pid_t pid() const;
@@ -154,6 +161,8 @@ namespace umbriel {
     Output* currentOutput() const;
     // Effective optional window-rule override used by tearing diagnostics.
     std::optional<bool> tearingRuleOverride();
+    // A window rule takes precedence over the output's fullscreen policy and content-type exemptions.
+    bool supersampled(bool supersampleFullscreen);
     bool confinePointer();
     double touchpadScrollFactor();
     bool allowsShortcutsInhibit();
@@ -258,6 +267,8 @@ namespace umbriel {
     // activation chrome the focus manager drives from outside.
     // While the workspace defers focus chrome, a layout member records `focused` instead of drawing it.
     void setBorderFocused(bool focused);
+    // The focus the ring is currently drawn with, which a hidden window keeps until the next focus change.
+    bool borderFocused() const { return m_borderFocusedState; }
     // Draw the focus a deferred setBorderFocused recorded, if any.
     void applyDeferredBorderFocus();
     // Jump focus appearance and unfocused dim to their targets. For views revealed after focus changed while
@@ -305,6 +316,10 @@ namespace umbriel {
     // A member of a tabbed column other than the one it shows. It keeps its layout slot and stays mapped and configured
     // at that size, but its frame stays disabled whatever else asks to enable it.
     void setTabHidden(bool hidden);
+    // True while the view's visibility belongs above its workspace: a live drag
+    // presentation, or a pinned transient ancestor whose output root presents the
+    // subtree. A workspace must not show or hide a view this returns true for.
+    bool dragPresentationOwnsVisibility() const;
     bool tabHidden() const { return m_tabHidden; }
     // Minimized: hidden, but keeping its workspace, floating box, stacking slot, and taskbar entries. Focusing the
     // window shows it again.
@@ -422,7 +437,7 @@ namespace umbriel {
     // A pointer drop can preserve its normal restore origin without moving the frame away from the release point.
     bool setRegion(WindowRegion region, std::optional<FloatingPoint> restoreOrigin = std::nullopt);
     void clearRegion(bool animate = true);
-    void clearRegionState();
+    void clearRegionState(bool keepResizeGrab = false);
     void refitFloatingRegion();
     // The usable area an opening window is sized against: the target output's,
     // then its full layout box, then whatever sits under the cursor. A hotplug
@@ -458,6 +473,22 @@ namespace umbriel {
     void cancelPositionAnimation();
     void snapPosition(int x, int y);
     void animateFadeTo(float toAlpha, int durationMs, const AnimationCurve& curve);
+    // Fade a window in as it leaves a scratchpad for its workspace: the second half of the fade that removed it. Bound
+    // to the scratchpad event even though its pad membership is already gone.
+    void beginScratchpadRestoreFade(int durationMs, const AnimationCurve& curve);
+    // Fade the window out and, for `popin`, collapse it toward the configured anchor. The node stays enabled until the
+    // fade lands, so the window is seen leaving; the reveal plays the same timeline in reverse.
+    void beginMinimizeConceal();
+    void beginMinimizeReveal();
+    // Land a conceal: disable the node and restore the resting presentation while it is off screen.
+    void finishMinimizeConceal();
+    // End a transition early and put the window back at its resting box: a restore that will not animate, an unmap, or
+    // a re-placement that makes the hide meaningless.
+    void abandonMinimizeTransition();
+    // True while a minimize fade runs in either direction. Neither runs a lifecycle shader.
+    bool minimizeFadeActive() const { return m_minimizePhase != MinimizePhase::None; }
+    // True only while the window is on its way out: the node stays enabled and the box belongs to the transition.
+    bool minimizeConcealing() const { return m_minimizePhase == MinimizePhase::Concealing; }
     const ViewPresentation& presentation() const { return m_presentation; }
     // Size/position to the full output and drop tile clips (exclusive zones do not apply).
     void applyFullscreenLayout(bool animate = false);
@@ -510,8 +541,9 @@ namespace umbriel {
     bool animatesOn(const Output* output) const override;
 
   private:
-    // `withShadow` copies the shadow.
-    CloseSnapshotId captureSnapshot(bool held, bool withShadow);
+    // `withShadow` copies the shadow. `resolvedWorkspace` is the workspace `handleUnmap` resolved before an attached
+    // dialog loses its link; null falls back to this view's own workspace.
+    CloseSnapshotId captureSnapshot(bool held, bool withShadow, Workspace* resolvedWorkspace = nullptr);
     friend class Cursor;
     friend class ScratchpadManager;
     friend class ColorManager;
@@ -653,8 +685,13 @@ namespace umbriel {
     void refreshConfigChrome();
     void updateBlur();
     void updateBlur(int contentWidth, int contentHeight);
+    // Picks up a committed ext_background_effect_v1 request for the root surface. Subsurfaces keep their own owners,
+    // and popups have theirs, so only the root surface is tracked here.
+    void syncClientBlur(wlr_surface* surface);
     SurfaceBlurOptions blurOptions() const;
     float blurAlpha() const;
+    // Blur alpha that also counts a client's ext_background_effect_v1 request, which opts in without a rule.
+    float surfaceBlurAlpha() const;
     SurfaceBlurOptions popupBlurOptions() const { return m_decoration.popupBlurOptions(); }
     void updateShadow();
     void updateShadow(int contentWidth, int contentHeight);
@@ -673,15 +710,23 @@ namespace umbriel {
     bool fullscreenOpaque() const;
     // The lifecycle fade runs through a whole-window shader, so buffers and borders stay opaque under it.
     bool fadeComposited() const;
+    // The event the fade binds and eases with: the pad's while the view belongs to one, the lifecycle's otherwise, or
+    // the one a scratchpad restore set for the fade it is running.
+    AnimationEvent fadeEvent() const;
     void applyEffectiveOpacity();
     void watchViewSurfaceTree(wlr_surface* root, wlr_subsurface* attachment = nullptr);
     void watchViewSurface(wlr_surface* surface, wlr_subsurface* attachment);
     void clearViewSurfaceWatches();
-    [[nodiscard]] CloseSnapshotId beginCloseAnimation();
+    // `resolvedWorkspace` is the workspace the closing window was drawn in, resolved before an attached dialog loses
+    // its link; null falls back to this view's own.
+    [[nodiscard]] CloseSnapshotId beginCloseAnimation(Workspace* resolvedWorkspace);
     // A frozen copy of this view's content and border, held over it until Server::releaseCloseSnapshot. The live view
     // stays under it at the same box and keeps drawing its own shadow, so the copy takes none.
     [[nodiscard]] CloseSnapshotId captureHeldSnapshot();
     void applyPresentedSize();
+    // A commit under a pointer resize replaces the client's buffer, which resets the crop; re-derive it against the
+    // box the grab owns instead of re-running the whole presentation.
+    void reapplyGrabbedCrop();
     // Refresh presentation through whichever owner currently holds the view.
     // Scratchpads are detached from workspaces but still need animated crop
     // and chrome updates.
@@ -699,14 +744,15 @@ namespace umbriel {
     // Refresh a finished/cancelled resize, retaining layout and pending floating frame ownership.
     void finishSizeAnimation();
     bool sizeAnimating() const {
-      return m_presentation.animating() || m_layoutMotion || tiledOpeningActive() || fullscreenOpeningActive();
+      return m_presentation.animating()
+          || m_layoutMotion
+          || tiledOpeningActive()
+          || fullscreenOpeningActive()
+          || openingInsetActive();
     }
     bool layoutPresentationOwned() const { return sizeAnimating() || m_layoutPresentationHeld; }
     void requestTiledSize(int width, int height);
     [[nodiscard]] bool settleTiledSizeRequest();
-    // Answers a tiled client that settled on a size of its own: the layout size is sent once per such size, and a
-    // client that takes it and then returns to its own size is floated at it.
-    void reassertTiledClientSize();
     // A layout size configure the client has not yet answered with a commit at that size.
     bool tiledSizeRequestPending() const { return m_tiledSizeRequest.has_value(); }
     // While windows_in owns a freshly admitted tiled view, presentation follows its final layout slot rather than the
@@ -715,11 +761,15 @@ namespace umbriel {
     // The same for a window that opens fullscreen: the layout owns the output box it rests in, windows_in owns the
     // scaled box it is presented at until the fade ends.
     bool fullscreenOpeningActive() const;
+    // A floating window that opens with an inset scales from the box it rests in at the size its client last drew, so
+    // a client that resizes itself while opening grows toward its new size instead of being squeezed into the old one.
+    bool floatingOpeningActive() const;
+    wlr_box floatingOpeningBox() const;
     // A built-in popin, zoom, or slide open offsets the presented box inside the box the layout assigned it, until
     // the fade that drives it reaches rest.
     bool openingInsetPending() const { return m_openingScale < 1.0 || m_openingSlide != 0; }
     bool openingInsetActive() const {
-      return openingInsetPending() && (tiledOpeningActive() || fullscreenOpeningActive());
+      return openingInsetPending() && (tiledOpeningActive() || fullscreenOpeningActive() || floatingOpeningActive());
     }
     // `box` with that inset applied, else `box` itself. Both extents are at least 1.
     wlr_box openingInsetBox(const wlr_box& box) const;
@@ -749,11 +799,6 @@ namespace umbriel {
     // itself. A move grab does not: it may retarget the size once, and the
     // presented size animates there like any other size change.
     bool sizeGrabTracksPointer() const;
-    // A pointer resize, and the final request it flushes on release until the client answers, shows the client's frame
-    // as drawn: never scaled, cropped 1:1 to a smaller tile, with the opposite edges of a float held in place.
-    bool presentsCommittedSize() const;
-    // A tiled resize grab steps through held switches (windows_resize.wait_for_redraw) instead of stretching buffers.
-    bool tiledResizeWaitsForClient() const;
     // Cursor owns when a drag starts and ends; View owns the scene invariants
     // for the temporary global presentation and its resting presentation.
     void enterDragPresentation();
@@ -762,16 +807,43 @@ namespace umbriel {
     // sheet keeps settling after the release. False when the sheet did not take the grab (physics off, or nothing
     // drawn); the drag then makes none of the calls below.
     [[nodiscard]] bool beginDragPhysics(double localX, double localY);
+    [[nodiscard]] bool beginResizePhysics(uint32_t edges);
     // The grabbed point moved within the frame (a retarget resized the window under the pointer).
     void setDragPhysicsGrab(double localX, double localY);
     void moveDragPhysics(double dx, double dy);
     void endDragPhysics();
+    // True while the physics sheet is displaced from its resting box: grabbed,
+    // or still settling after the release.
+    bool dragSheetDisplaced() const;
+    // True while the drag tree actively presents this view: held by the cursor,
+    // or still displaced after the release. Resting under the drag tree once the
+    // spring settles is not presentation.
+    bool dragPresented() const;
+    // True while the drag tree actively presents this view or a transient
+    // ancestor: the placement the drag owns, and the stable form of it.
+    bool dragPresentationLive() const;
+    // The release's say over where the view rests: the window closes when the
+    // release handler ends, flush lands the wait immediately.
+    void closeReleaseRehomeWindow();
+    void flushReleaseRehome();
+    // True while a view rests under the drag tree.
+    bool dragTreeOccupied() const;
+    void endResizePhysics();
+    DragPhysics::Tuning dragTuning() const;
+    bool dragPhysicsEnabled() const;
+    void resetDragPhysics();
+    void wakeDragPhysics(bool wasActive);
+    void cancelResizeGrab();
     // Refits the sheet to the content tree's drawn bounds when they changed, or when the grab moved.
     void fitDragPhysics(bool grabMoved);
+    // Refits an active resize sheet and feeds the committed size change since the previous step.
+    void stepResizePhysics();
     struct DragFit {
       wlr_box bounds;
       std::array<float, 2> grab;
     };
+    // The content tree's drawn bounds; empty when the tree draws nothing.
+    std::optional<wlr_box> dragPhysicsBounds() const;
     // The content tree's drawn bounds and the grab as fractions of them; empty when the tree draws nothing.
     std::optional<DragFit> dragPhysicsFit() const;
     // The drag slot's expand: the sheet's displacement bound plus a filtering margin.
@@ -781,7 +853,7 @@ namespace umbriel {
     // Kick the owning output so an animation started outside a frame gets ticked.
     void scheduleFrame();
     void cancelSizeAnimation();
-    void updateFullscreenPresentation(int width, int height);
+    void updateFullscreenPresentation(int width, int height, bool centerDrawn = false);
     // Apply subsurface clip to the toplevel surface only, not xdg popup children.
     void setSurfaceTreeClip(const wlr_box* clip);
     void unconstrainPopup(wlr_xdg_popup* popup);
@@ -789,10 +861,16 @@ namespace umbriel {
     // popups included). Scale-aware clients size and map pointer coordinates by this, so it must follow the view across
     // outputs and track scale changes.
     void notifyOutputScale();
+    // Re-send only the scale hints, after something supersampled() reads changed (fullscreen, content type, rules).
+    // The notifies dedup, so an unchanged answer costs nothing.
+    void refreshScaleHints();
     // Keep floats visually at the last requested size while client geometry lags.
     void syncFloatingSurfaceClip();
     void beginFloatingResize(uint32_t edges);
-    void resizeFloating(int width, int height);
+    // A pointer resize asks the client for the new size on the motion event, so client latency is unchanged, and
+    // applies the box to the scene from the frame path: the layout pipeline is what a drag cannot afford per event.
+    void requestFloatingResize(const wlr_box& box);
+    void applyFloatingResize(const wlr_box& box);
     void finishFloatingResize();
     void sendFloatingSize(int width, int height);
     void commitFloatingSize();
@@ -839,9 +917,27 @@ namespace umbriel {
     void syncModalShade();
     void releaseDialog();
     [[nodiscard]] bool inheritScratchpadFromParent(bool restoreTiled);
-    void syncTransientSceneParent();
+    // Re-homes this node under the tree its transient parent now lives in. Returns true when the move changed the
+    // view's presentation tree, so the caller re-homes the subtree and collapses the drag elevation.
+    bool syncTransientSceneParent();
+    // The one reparent policy: waits out a displaced sheet, moves the node with its shadow and X11 state, and returns
+    // whether the move entered or left a presentation tree (the drag tree or a pinned root), so the caller re-homes
+    // the transient subtree. The caller owns that subtree.
+    bool applySceneParent(wlr_scene_tree* parent);
+    // True while this node rests under the server's pinned tree, which every output's pinned root hangs from.
+    bool underPinnedRoot() const;
+    // The parent whose landing or unpin re-homes this view: the transient parent when the chain holds, else the
+    // declared parent while a drag or pinned presentation carries it across a workspace change.
+    View* rehomeParent() const;
+    // Lowers the drag tree under its icons once no drag-presented view is left in it.
+    void demoteDragTreeIfIdle();
     // Appends the frames a raise of this transient tree lifts, in the order it lifts them.
     void collectTransientTree(std::vector<wlr_scene_node*>& frames);
+    // Re-points transient children at the trees this view now lives under.
+    void syncTransientChildren();
+    // The one transient walk: re-homes each node, and appends it when `frames` is given. An attached dialog's subtree
+    // is skipped, because its parent's own frame already carries it.
+    void walkTransientTree(std::vector<wlr_scene_node*>* frames);
     void updateForeignIdentity();
     void updateForeignState();
     void enterForeignOutput();
@@ -993,6 +1089,8 @@ namespace umbriel {
     void refreshTitleBar();
     // A window rule's title_bar_buttons, which replaces [appearance.title_bar] buttons.
     std::optional<std::vector<TitleBarButton>> m_titleBarButtons;
+    // A window rule's title_bar_color_source, which replaces [appearance.title_bar] color_source.
+    std::optional<TitleBarColorSource> m_titleBarColorSource;
     // Hand the frame the configured buttons this window can use now: minimize only while it can minimize.
     void syncTitleBarButtons();
     int m_chromeContentWidth = 0;
@@ -1001,13 +1099,26 @@ namespace umbriel {
     bool m_minimized = false;
     uint64_t m_minimizeSerial = 0;
     ViewEffects m_effects;
+    // The effect-registry generation this view last re-bound against (UINT64_MAX = never).
+    uint64_t m_effectSyncGeneration = UINT64_MAX;
     ViewPresentation m_presentation;
     DragPhysics m_dragPhysics;
     double m_dragPhysicsMsec = 0; // animation clock at the sheet's last tick
+    // The resting re-home requested while the released sheet was still
+    // displaced (setSceneParent defers it); applied when the spring settles.
+    wlr_scene_tree* m_pendingHomeParent = nullptr;
+    // Armed for one release flow: setSceneParent absorbs the reparents the
+    // release issues until closeReleaseRehomeWindow() ends the flow.
+    bool m_releaseRehomeArmed = false;
     // The frame-local grab and the content tree's drawn bounds the sheet was last fitted to.
     double m_dragGrabX = 0;
     double m_dragGrabY = 0;
     wlr_box m_dragBounds{};
+    // Non-None while an interactive floating resize feeds committed size steps to the sheet.
+    DragPhysics::ResizeEdge m_dragResizeEdges = DragPhysics::ResizeEdge::None;
+    enum class DragPhysicsMode : uint8_t { None, Drag, Resize };
+    // Originating mode of the current sheet; held until the sheet settles or resets.
+    DragPhysicsMode m_dragPhysicsMode = DragPhysicsMode::None;
     bool m_dragSlotBound = false; // the content tree carries the drag slot
     wlr_box m_presentedBox{};
     // Last committed content size considered for the windows event stream.
@@ -1067,16 +1178,22 @@ namespace umbriel {
       ClientSize baseBuffer;
     };
     std::optional<TiledSizeRequest> m_tiledSizeRequest;
-    std::optional<ClientSize> m_reassertedClientSize;
-    // The layout size the client last drew exactly.
-    std::optional<ClientSize> m_layoutFitSize;
     float m_layoutMotionDirection = 1.0F;
     bool m_tiledOpeningDeferred = false;
     // Inset a built-in windows_in style starts an opener at, interpolated to rest by the fade: a popin or zoom scale
     // (1.0 = none) and a slide offset in logical pixels (0 = none).
     double m_openingScale = 1.0;
-    std::optional<std::array<int, 2>> m_openingFloatingSize;
     int m_openingSlide = 0;
+    // One minimize transition at a time. A conceal owns the node, the fade and the presented box until it lands; the
+    // reveal is the same timeline in reverse, so neither is a lifecycle transition.
+    enum class MinimizePhase : uint8_t {
+      None,
+      Concealing,
+      Revealing,
+    };
+    MinimizePhase m_minimizePhase = MinimizePhase::None;
+    // The resting box a conceal collapses from and returns to, captured when it starts.
+    wlr_box m_minimizeResting{};
     bool m_tiled = false;
     // Floating because its workspace uses stacking; tiles again when moved to a tiling layout.
     bool m_floatedByStackingLayout = false;
@@ -1116,6 +1233,8 @@ namespace umbriel {
     AnimatedValue m_posY;
     AnimatedValue m_fade;
     bool m_customFade = false;
+    // Set while a scratchpad restore fade runs, so the fade keeps the scratchpad event after membership is cleared.
+    std::optional<AnimationEvent> m_fadeEvent;
     AnimatedColor m_borderColorAnim;
     AnimatedColor m_outerBorderColorAnim;
     AnimatedValue m_focusDim{1.0};
@@ -1130,7 +1249,10 @@ namespace umbriel {
     AnimatedValue m_ruleOpacity{1.0};
     AnimatedValue m_ruleBlur{0.0};
     bool m_backgroundRender = false;
+    bool m_clientBlurRequested = false;
+    pixman_region32_t m_clientBlurRegion{};
     bool m_allowShortcutsInhibit = true;
+    std::optional<bool> m_appliedSupersampleRule;
     float m_dragOpacity = 1.0F;
     float m_overviewOpacity = 1.0F;
     std::vector<std::unique_ptr<ViewSurfaceWatch>> m_viewSurfaceWatches;

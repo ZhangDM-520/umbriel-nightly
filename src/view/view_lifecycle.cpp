@@ -14,6 +14,7 @@
 #include "scene/surface_blur.h"
 #include "server/ipc.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/view.h"
 extern "C" {
 #include <umbrielfx/render/effect.h>
@@ -175,6 +176,7 @@ namespace umbriel {
     ViewSurfaceWatch* watch;
     watch = wl_container_of(listener, watch, commit);
     watch->view->syncContentType(watch->surface);
+    watch->view->syncClientBlur(watch->surface);
   }
 
   void View::onViewSurfaceNewSubsurface(wl_listener* listener, void* data) {
@@ -229,7 +231,6 @@ namespace umbriel {
     }
     m_effects.resetSlots();
     m_tiledOpeningDeferred = false;
-    m_openingFloatingSize.reset();
     m_presentedTiledBox = {};
     m_acceptClientMaximizeRequests = config().general.honorRestoredMaximize;
     // Firefox often re-assert session maximize after map. With honor off, consume that one request so
@@ -328,7 +329,7 @@ namespace umbriel {
             : currentOutput();
         assignedScratchpad = scratchpad->assignAutomatic(
             this, *rule.defaultScratchpad, restoreOutput,
-            ScratchpadManager::AutomaticAdmission{
+            ScratchpadManager::AdmissionOptions{
                 .restoreOutput = restoreOutput,
                 .restoreWorkspace = restoreWorkspace,
                 .focusOrigin = restoreOutput,
@@ -358,7 +359,7 @@ namespace umbriel {
             : currentOutput();
         assignedLaunchScratchpad = scratchpad->assignAutomatic(
             this, m_launchScratchpad, restoreOutput,
-            ScratchpadManager::AutomaticAdmission{
+            ScratchpadManager::AdmissionOptions{
                 .restoreOutput = restoreOutput,
                 .restoreWorkspace = restoreWorkspace,
                 .focusOrigin = restoreOutput,
@@ -503,55 +504,23 @@ namespace umbriel {
         // windows_move reflow that makes room for it. An overview card follows that same reveal.
         deferTiledOpening();
       } else {
-        if (!m_tiled && !layoutFullscreen() && m_presentation.width() > 0 && m_presentation.height() > 0) {
-          m_openingFloatingSize = std::array{m_presentation.width(), m_presentation.height()};
-        }
         setFadeAlpha(0.0F);
         m_fade.snap(0.0);
         m_fade.retarget(1.0, open.durationMs, open.curve);
 
-        // Floating and fullscreen windows tween themselves.
+        // Fullscreen and floating windows apply the inset to the box they rest in on every fade tick: the output box
+        // the arrange after this map assigns, or the float's position at the size its client draws by then.
         if (!m_customFade && (open.style == "popin" || open.style == "zoom")) {
-          const double scale = std::clamp(open.style == "zoom" ? 0.5 : open.scale, 0.0, 1.0);
-          if (layoutFullscreen()) {
-            // The output box this window rests in is assigned by the arrange that follows this map, so the inset is
-            // applied against that box on every fade tick instead of tweening a node it has not been placed in yet.
-            m_openingScale = scale;
-            const wlr_box area = fullscreenLayoutBox();
-            setLayoutTarget(area.x, area.y);
-            presentBox(area);
-          } else if (m_presentation.width() > 0 && m_presentation.height() > 0) {
-            const int targetW = m_presentation.width();
-            const int targetH = m_presentation.height();
-            const int startW = std::max(1, static_cast<int>(targetW * scale));
-            const int startH = std::max(1, static_cast<int>(targetH * scale));
-            const int targetX = layoutX();
-            const int targetY = layoutY();
-            const int startX = targetX + (targetW - startW) / 2;
-            const int startY = targetY + (targetH - startH) / 2;
-
-            m_presentation.setSize(startW, startH);
-            m_presentation.animateTo(targetW, targetH, open.durationMs, open.curve);
-            setScenePosition(startX, startY);
-            m_posX.snap(startX);
-            m_posY.snap(startY);
-            m_posX.retarget(targetX, open.durationMs, open.curve);
-            m_posY.retarget(targetY, open.durationMs, open.curve);
-          }
+          m_openingScale = std::clamp(open.style == "zoom" ? 0.5 : open.scale, 0.0, 1.0);
         } else if (!m_customFade && open.style == "slide") {
-          if (layoutFullscreen()) {
-            m_openingSlide = kOpenSlidePx;
-            const wlr_box area = fullscreenLayoutBox();
-            setLayoutTarget(area.x, area.y);
-            presentBox(area);
-          } else {
-            const int targetX = layoutX();
-            const int targetY = layoutY();
-            setScenePosition(targetX, targetY + kOpenSlidePx);
-            m_posX.snap(targetX);
-            m_posY.snap(targetY + kOpenSlidePx);
-            m_posY.retarget(targetY, open.durationMs, open.curve);
-          }
+          m_openingSlide = kOpenSlidePx;
+        }
+        if (openingInsetPending() && layoutFullscreen()) {
+          const wlr_box area = fullscreenLayoutBox();
+          setLayoutTarget(area.x, area.y);
+          presentBox(area);
+        } else if (openingInsetPending() && !m_tiled) {
+          presentBox(floatingOpeningBox());
         }
         scheduleFrame();
       }
@@ -583,6 +552,12 @@ namespace umbriel {
   }
 
   void View::handleUnmap(bool animateClose) {
+    // Resolve the pad before the attachment links below are released: an attached dialog reaches its pad through its
+    // placement root, and `unlinkAttachment()` drops that link.
+    Workspace* snapshotWorkspace = m_workspace;
+    if (snapshotWorkspace == nullptr && m_server->scratchpadManager() != nullptr) {
+      snapshotWorkspace = m_server->scratchpadManager()->workspaceFor(this);
+    }
     m_server->seat()->toplevelDrags().unmapped(this);
     if (m_effectSelectionIdle != nullptr) {
       wl_event_source_remove(m_effectSelectionIdle);
@@ -656,7 +631,7 @@ namespace umbriel {
       overview->onViewUnmapped(this, animateClose);
     }
     // Replacement focus can hide the closing tab. Capture while its current visibility still decides eligibility.
-    const CloseSnapshotId snapshot = animateClose ? beginCloseAnimation() : kInvalidCloseSnapshot;
+    const CloseSnapshotId snapshot = animateClose ? beginCloseAnimation(snapshotWorkspace) : kInvalidCloseSnapshot;
     // After the close capture, so a minimized window closes unseen. The live node is not re-enabled: a remap shows the
     // window normally.
     if (m_minimized) {
@@ -691,7 +666,15 @@ namespace umbriel {
     wlr_scene_node_clear_animations(&m_contentTree->node);
     m_dragSlotBound = false;
     // The snapshot holds the frozen deformation; the live sheet ends here.
-    m_dragPhysics = DragPhysics{};
+    resetDragPhysics();
+    // Land the resting tree so a later remap cannot reappear unclipped under the
+    // drag tree. homeTree() is authoritative: the states above are already stripped.
+    const bool needsRehome = m_pendingHomeParent != nullptr || m_sceneTree->node.parent == m_server->dragTree();
+    m_releaseRehomeArmed = false;
+    m_pendingHomeParent = nullptr;
+    if (needsRehome) {
+      setSceneParent(homeTree());
+    }
     // The window slots leave with the snapshot; a remap binds them again.
     if (m_effects.needsSurface()) {
       wlr_surface* surface = rootSurface();
@@ -702,8 +685,8 @@ namespace umbriel {
     }
     cancelFadeAnimation();
     // The workspace owns the snapshot's visibility and its slide translation from here.
-    if (snapshot != kInvalidCloseSnapshot && m_workspace != nullptr) {
-      m_workspace->trackCloseSnapshot(snapshot, m_presentedBox);
+    if (snapshot != kInvalidCloseSnapshot && snapshotWorkspace != nullptr) {
+      snapshotWorkspace->trackCloseSnapshot(snapshot, m_presentedBox);
     }
     cancelSizeAnimation();
     m_tiledSizeRequest.reset();
@@ -855,6 +838,8 @@ namespace umbriel {
     }
     m_contentType = next;
     m_server->scheduleIpcWindowsEvent();
+    // Game and video content skip the supersample.
+    refreshScaleHints();
     if (m_mapped) {
       if (!m_initialContentTypeRulesSettled && next != ContentType::None) {
         m_initialContentTypeRulesSettled = true;
@@ -1101,9 +1086,12 @@ namespace umbriel {
         m_savedScrollingExtent = rule.defaultScrollingExtent;
       }
     }
+    const bool hadResizeRequest = m_floatingSizeConfigure.has_value() || m_tiledSizeRequest.has_value();
     commitFloatingSize();
     (void)settleTiledSizeRequest();
-    reassertTiledClientSize();
+    if (m_mapped && m_workspace != nullptr) {
+      m_workspace->releaseAnsweredLayoutHold();
+    }
     applyCornerRadius();
     // Re-apply the owner's frame and clip after each client commit. A tiled commit is not a resize request: Chromium
     // can change its geometry without changing configure, but the layout still owns its box.
@@ -1117,8 +1105,14 @@ namespace umbriel {
       } else {
         syncFloatingResizePosition();
         adoptFloatingClientSize();
-        // Enable + clip through the current presentation owner.
-        syncOwnedPresentation();
+        if (sizeGrabTracksPointer()) {
+          // The grab owns the presented box, so a commit at a different size cannot change it: the client's buffer
+          // is all that moved, and the scene helper reset the crop for it.
+          reapplyGrabbedCrop();
+        } else {
+          // Enable + clip through the current presentation owner.
+          syncOwnedPresentation();
+        }
       }
     } else {
       updateBlur();
@@ -1154,6 +1148,14 @@ namespace umbriel {
       if (m_mapped) {
         m_server->scheduleIpcWindowsEvent();
       }
+    }
+    // An adaptive title bar shows the top of this surface, so a repaint of that edge has to reach it with no reload.
+    if (m_ssdFrame != nullptr) {
+      m_ssdFrame->syncContent(geometryBox());
+    }
+    // The tick a resize waits for: the client has answered a configure with a buffer of a new size.
+    if (m_mapped && (hadResizeRequest || m_floatingSizeConfigure || m_tiledSizeRequest)) {
+      resizeTrace::commit(*this);
     }
     if (Ipc* ipc = m_server->ipc()) {
       ipc->notifyWindowCommitted();

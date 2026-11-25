@@ -11,6 +11,7 @@
 #include "scene/surface_blur.h"
 #include "server/color_manager.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/view.h"
 extern "C" {
 #include <umbrielfx/render/effect.h>
@@ -22,12 +23,30 @@ extern "C" {
 #include <utility>
 #include "wlr.h"
 // clang-format on
+#include "workspace/scratchpad.h"
 #include "workspace/workspace.h"
 #include "xwayland/xwayland.h"
 
 namespace umbriel {
   namespace {
     constexpr Logger kLog("view");
+
+    DragPhysics::ResizeEdge toResizeEdges(uint32_t edges) {
+      DragPhysics::ResizeEdge result = DragPhysics::ResizeEdge::None;
+      if ((edges & WLR_EDGE_TOP) != 0) {
+        result = result | DragPhysics::ResizeEdge::Top;
+      }
+      if ((edges & WLR_EDGE_BOTTOM) != 0) {
+        result = result | DragPhysics::ResizeEdge::Bottom;
+      }
+      if ((edges & WLR_EDGE_LEFT) != 0) {
+        result = result | DragPhysics::ResizeEdge::Left;
+      }
+      if ((edges & WLR_EDGE_RIGHT) != 0) {
+        result = result | DragPhysics::ResizeEdge::Right;
+      }
+      return result;
+    }
   } // namespace
 
   using view_detail::toplevelSurfaceTreeNode;
@@ -35,15 +54,32 @@ namespace umbriel {
   void View::cancelPositionAnimation() {
     // Freeze wherever the node currently sits; callers use this to take over
     // positioning (drags, layout snaps) without a jump.
+    const bool wasAnimating = m_posX.animating() || m_posY.animating();
     m_posX.snap(layoutX());
     m_posY.snap(layoutY());
+    // A snapped tween stops reporting progress; re-sync so the tick's gate
+    // cannot leave the windows_move binding frozen at its last partial travel.
+    if (wasAnimating) {
+      syncAnimationEffects();
+    }
   }
 
   bool View::fadeComposited() const {
-    if (!m_fade.animating()) {
+    // A minimize fade runs no effect program in either direction, so it composites plain alpha.
+    if (!m_fade.animating() || minimizeFadeActive()) {
       return false;
     }
-    return m_customFade || (!m_inScratchpad && effectRegistry().lifecycleEffect(AnimationEvent::WindowsIn) != nullptr);
+    // A scratchpad fade composites plain alpha unless a scratchpad shader is bound: its show, hide and restore are
+    // opacity transitions, not lifecycle openings.
+    const AnimationEvent event = fadeEvent();
+    if (event == AnimationEvent::Scratchpad) {
+      return m_customFade;
+    }
+    return m_customFade || effectRegistry().lifecycleEffect(event) != nullptr;
+  }
+
+  AnimationEvent View::fadeEvent() const {
+    return m_fadeEvent.value_or(m_inScratchpad ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn);
   }
 
   float View::effectiveOpacity() const {
@@ -90,7 +126,7 @@ namespace umbriel {
     // The analytic fallback still follows the lifecycle fade. Shader-shaped
     // shadows get their opacity from captured pixels instead of this multiplier.
     const float shadowOpacity = fadeComposited() ? effective * m_fadeAlpha : effective;
-    m_decoration.setAlpha(shadowOpacity, blurAlpha());
+    m_decoration.setAlpha(shadowOpacity, surfaceBlurAlpha());
     if (m_chromeAttachment != nullptr) {
       m_chromeAttachment->setAlpha(chromeAlpha());
     }
@@ -119,19 +155,33 @@ namespace umbriel {
   }
 
   void View::cancelFadeAnimation() {
+    const bool wasAnimating = m_fade.animating();
+    // An unmap or a fresh map abandons a minimize transition. A conceal left the node and box collapsed, and a re-map
+    // may never issue the presentation that would put them back.
+    if (minimizeConcealing()) {
+      abandonMinimizeTransition();
+    }
+    m_minimizePhase = MinimizePhase::None;
     m_fade.snap(1.0);
+    m_fadeEvent.reset();
     setFadeAlpha(1.0F);
     releaseOpeningPresentation();
+    // A snapped fade stops reporting progress; re-sync so the tick's gate
+    // cannot leave the in-flight fade binding frozen at its last partial progress.
+    if (wasAnimating) {
+      syncAnimationEffects();
+    }
   }
 
   bool View::openingAnimationActive() const {
-    return m_mapped && !m_inScratchpad && m_fade.animating() && m_fade.target() > m_fade.from() && !sizeGrabActive();
+    return m_mapped
+        && fadeEvent() == AnimationEvent::WindowsIn
+        && m_fade.animating()
+        && m_fade.target() > m_fade.from()
+        && !sizeGrabActive();
   }
 
   void View::releaseOpeningPresentation(bool completed, bool pointerTakeover) {
-    if (!completed) {
-      m_openingFloatingSize.reset();
-    }
     if (!pointerTakeover) {
       dropOpeningInset();
     }
@@ -145,7 +195,7 @@ namespace umbriel {
 
   bool View::tiledOpeningActive() const {
     return m_mapped
-        && !m_inScratchpad
+        && fadeEvent() == AnimationEvent::WindowsIn
         && m_tiled
         && !layoutFullscreen()
         && m_workspace != nullptr
@@ -155,7 +205,24 @@ namespace umbriel {
   }
 
   bool View::fullscreenOpeningActive() const {
-    return m_mapped && !m_inScratchpad && layoutFullscreen() && m_fade.animating() && m_fade.target() > m_fade.from();
+    return m_mapped
+        && fadeEvent() == AnimationEvent::WindowsIn
+        && layoutFullscreen()
+        && m_fade.animating()
+        && m_fade.target() > m_fade.from();
+  }
+
+  bool View::floatingOpeningActive() const { return openingAnimationActive() && !m_tiled && !layoutFullscreen(); }
+
+  wlr_box View::floatingOpeningBox() const {
+    // The position the window rests at, or is animating through; its scene node carries the inset instead.
+    const wlr_box& geometry = geometryBox();
+    return {
+        .x = static_cast<int>(std::lround(m_posX.current())),
+        .y = static_cast<int>(std::lround(m_posY.current())),
+        .width = geometry.width,
+        .height = geometry.height,
+    };
   }
 
   wlr_box View::openingInsetBox(const wlr_box& box) const {
@@ -212,6 +279,9 @@ namespace umbriel {
     if (m_tiled && m_workspace != nullptr && m_workspace->layout().columnOf(this) >= 0) {
       const wlr_box slot = m_workspace->presentedTiledBox(this);
       setScenePosition(slot.x, slot.y);
+    } else if (!m_tiled) {
+      const wlr_box rest = floatingOpeningBox();
+      setScenePosition(rest.x, rest.y);
     }
   }
 
@@ -230,20 +300,13 @@ namespace umbriel {
   }
 
   int View::presentedWidth(const wlr_box& target) const {
-    if (presentsCommittedSize()) {
-      const int committed = committedContentBox().width;
-      return m_tiled ? std::min(committed, target.width) : committed;
-    }
     if (sizeGrabActive()) {
       return target.width;
     }
     if (layoutPresentationOwned()) {
       return m_presentation.width();
     }
-    if (currentFullscreen()
-        || m_tiled
-        || m_floating.pendingSize()
-        || (openingAnimationActive() && m_openingFloatingSize)) {
+    if (currentFullscreen() || m_tiled || m_floating.pendingSize()) {
       return target.width;
     }
     return std::min(committedContentBox().width, target.width);
@@ -252,20 +315,13 @@ namespace umbriel {
   void View::trackPresentedSize(int width, int height) { m_presentation.track(width, height); }
 
   int View::presentedHeight(const wlr_box& target) const {
-    if (presentsCommittedSize()) {
-      const int committed = committedContentBox().height;
-      return m_tiled ? std::min(committed, target.height) : committed;
-    }
     if (sizeGrabActive()) {
       return target.height;
     }
     if (layoutPresentationOwned()) {
       return m_presentation.height();
     }
-    if (currentFullscreen()
-        || m_tiled
-        || m_floating.pendingSize()
-        || (openingAnimationActive() && m_openingFloatingSize)) {
+    if (currentFullscreen() || m_tiled || m_floating.pendingSize()) {
       return target.height;
     }
     return std::min(committedContentBox().height, target.height);
@@ -274,14 +330,20 @@ namespace umbriel {
   // Fullscreen chrome follows committed state. Transitions may scale the old buffer, while settled mismatched buffers
   // remain centered and cropped without distortion.
 
-  void View::updateFullscreenPresentation(int width, int height) {
+  void View::updateFullscreenPresentation(int width, int height, bool centerDrawn) {
+    // Only xdg content: an X11 window's surface offset would disagree with the position its X clients are told.
+    const wlr_box drawn = centerDrawn && m_toplevel != nullptr ? committedContentBox() : wlr_box{};
     m_presentation.updateFullscreen(
-        currentFullscreen(), width, height, toplevelSurfaceTreeNode(m_contentTree, rootSurface()), geometryBox()
+        currentFullscreen(), width, height, toplevelSurfaceTreeNode(m_contentTree, rootSurface()), geometryBox(),
+        drawn.width, drawn.height
     );
   }
 
   void View::applyPresentedCrop(const wlr_box& content, const wlr_box& surfaceClip) {
-    m_presentation.applyCrop(m_contentTree, rootSurface(), geometryBox(), content, surfaceClip);
+    m_presentation.applyCrop(
+        m_contentTree, rootSurface(), geometryBox(), content, surfaceClip,
+        shrinkSampling(sizeGrabTracksPointer() || m_floating.anchor().has_value())
+    );
     m_presentedCropActive = true;
     syncXwaylandShape();
   }
@@ -313,6 +375,22 @@ namespace umbriel {
     syncOwnedPresentation();
   }
 
+  void View::reapplyGrabbedCrop() {
+    if (!sizeGrabTracksPointer() || m_presentedBox.width <= 0 || m_presentedBox.height <= 0) {
+      return;
+    }
+    // The same clip applyPresentation derives, against the box the grab already owns.
+    const wlr_box& geometry = geometryBox();
+    const wlr_box surfaceClip{
+        .x = geometry.x - m_presentation.offsetX(),
+        .y = geometry.y - m_presentation.offsetY(),
+        .width = m_presentedBox.width,
+        .height = m_presentedBox.height,
+    };
+    setSurfaceTreeClip(&surfaceClip);
+    applyPresentedCrop(m_presentedBox, surfaceClip);
+  }
+
   void View::syncOwnedPresentation() {
     if (const Cursor* cursor = m_server->cursor(); cursor != nullptr && cursor->isDraggingView(this)) {
       applyDragPresentation();
@@ -341,7 +419,7 @@ namespace umbriel {
   }
 
   void View::finishSizeAnimation() {
-    if ((!currentFullscreen() && m_tiled) || m_floating.pendingSize() || m_openingFloatingSize) {
+    if ((!currentFullscreen() && m_tiled) || m_floating.pendingSize()) {
       resetPresentedSurface();
       applyPresentedSize();
       return;
@@ -368,6 +446,7 @@ namespace umbriel {
     const wlr_box content = committedContentBox();
     m_presentation.setRegion(content.width, content.height);
     finishSizeAnimation();
+    syncAnimationEffects();
   }
 
   bool View::sizeGrabActive() const {
@@ -379,17 +458,11 @@ namespace umbriel {
   }
 
   bool View::sizeGrabTracksPointer() const {
+    if (scheduledFullscreen() || currentFullscreen()) {
+      return false;
+    }
     const Cursor* cursor = m_server->cursor();
-    return cursor != nullptr
-        && (cursor->isResizingView(this) || cursor->isResizingWorkspace(m_workspace))
-        && !tiledResizeWaitsForClient();
-  }
-
-  bool View::presentsCommittedSize() const { return sizeGrabTracksPointer() || m_pointerResizeSettling; }
-
-  bool View::tiledResizeWaitsForClient() const {
-    const auto& animation = config().animation;
-    return m_tiled && animation.windowsResize.waitsForClient(animation.enabled);
+    return cursor != nullptr && (cursor->isResizingView(this) || (m_tiled && cursor->isResizingWorkspace(m_workspace)));
   }
 
   void View::enterDragPresentation() {
@@ -415,11 +488,24 @@ namespace umbriel {
     raiseToTop();
   }
 
+  DragPhysics::Tuning View::dragTuning() const {
+    const auto& drag = config().animation.windowsDrag;
+    return DragPhysics::Tuning{
+        .stiffness = static_cast<float>(drag.stiffness),
+        .damping = static_cast<float>(drag.damping),
+        .coupling = static_cast<float>(drag.coupling),
+        .pointerResponse = static_cast<float>(drag.pointerResponse),
+        .maxDisplacementPx = static_cast<float>(drag.maxDisplacementPx),
+        .settleAfterPauseS = drag.settleAfterPauseS,
+    };
+  }
+
   bool View::beginDragPhysics(double localX, double localY) {
     // Null while animations or physics are off, or when the program failed to compile: the window stays rigid.
-    if (effectRegistry().deformationShader() == nullptr) {
+    if (effectRegistry().deformationShader() == nullptr || !config().animation.windowsDrag.physics) {
       return false;
     }
+    m_dragResizeEdges = DragPhysics::ResizeEdge::None;
     m_dragGrabX = localX;
     m_dragGrabY = localY;
     const std::optional<DragFit> fit = dragPhysicsFit();
@@ -427,18 +513,33 @@ namespace umbriel {
       return false;
     }
     m_dragBounds = fit->bounds;
-    const auto& drag = config().animation.windowsDrag;
+    m_dragPhysicsMode = DragPhysicsMode::Drag;
     m_dragPhysics.begin(
         static_cast<float>(fit->bounds.width), static_cast<float>(fit->bounds.height), fit->grab[0], fit->grab[1],
-        m_dragPhysics.active() ? m_dragPhysics.transitionId() : nextAnimationTransitionId(),
-        DragPhysics::Tuning{
-            .stiffness = static_cast<float>(drag.stiffness),
-            .damping = static_cast<float>(drag.damping),
-            .coupling = static_cast<float>(drag.coupling),
-            .pointerResponse = static_cast<float>(drag.pointerResponse),
-            .maxDisplacementPx = static_cast<float>(drag.maxDisplacementPx),
-            .settleAfterPauseS = drag.settleAfterPauseS,
-        }
+        m_dragPhysics.active() ? m_dragPhysics.transitionId() : nextAnimationTransitionId(), dragTuning()
+    );
+    return true;
+  }
+
+  bool View::beginResizePhysics(uint32_t edges) {
+    if (effectRegistry().deformationShader() == nullptr || !config().animation.windowsResize.physics) {
+      return false;
+    }
+    const DragPhysics::ResizeEdge resizeEdges = toResizeEdges(edges);
+    if (resizeEdges == DragPhysics::ResizeEdge::None) {
+      return false;
+    }
+    const std::optional<wlr_box> bounds = dragPhysicsBounds();
+    if (!bounds) {
+      return false;
+    }
+    m_dragBounds = *bounds;
+    m_dragResizeEdges = resizeEdges;
+    m_dragPhysicsMode = DragPhysicsMode::Resize;
+    const std::array<float, 2> pin = DragPhysics::resizePin(resizeEdges);
+    m_dragPhysics.begin(
+        static_cast<float>(bounds->width), static_cast<float>(bounds->height), pin[0], pin[1],
+        m_dragPhysics.active() ? m_dragPhysics.transitionId() : nextAnimationTransitionId(), dragTuning()
     );
     return true;
   }
@@ -453,6 +554,15 @@ namespace umbriel {
     if (!m_dragPhysics.grabbed() && !m_dragPhysics.active()) {
       return;
     }
+    if (!m_dragPhysics.grabbed()) {
+      const std::optional<wlr_box> bounds = dragPhysicsBounds();
+      if (!bounds || wlr_box_equal(&*bounds, &m_dragBounds)) {
+        return;
+      }
+      m_dragBounds = *bounds;
+      m_dragPhysics.resize(static_cast<float>(bounds->width), static_cast<float>(bounds->height), 0.5F, 0.5F);
+      return;
+    }
     const std::optional<DragFit> fit = dragPhysicsFit();
     if (!fit || (!grabMoved && wlr_box_equal(&fit->bounds, &m_dragBounds))) {
       return;
@@ -464,17 +574,43 @@ namespace umbriel {
     );
   }
 
-  std::optional<View::DragFit> View::dragPhysicsFit() const {
+  void View::stepResizePhysics() {
+    if (!m_dragPhysics.grabbed() || m_dragResizeEdges == DragPhysics::ResizeEdge::None) {
+      return;
+    }
+    const std::optional<wlr_box> bounds = dragPhysicsBounds();
+    if (!bounds || wlr_box_equal(&*bounds, &m_dragBounds)) {
+      return;
+    }
+    const auto dw = static_cast<float>(bounds->width - m_dragBounds.width);
+    const auto dh = static_cast<float>(bounds->height - m_dragBounds.height);
+    m_dragBounds = *bounds;
+    const std::array<float, 2> pin = DragPhysics::resizePin(m_dragResizeEdges);
+    m_dragPhysics.resize(static_cast<float>(bounds->width), static_cast<float>(bounds->height), pin[0], pin[1]);
+    const bool wasActive = m_dragPhysics.active();
+    m_dragPhysics.moveResize(dw, dh, m_dragResizeEdges);
+    wakeDragPhysics(wasActive);
+  }
+
+  std::optional<wlr_box> View::dragPhysicsBounds() const {
     wlr_box bounds{};
     if (!wlr_scene_node_effect_bounds(&m_contentTree->node, &bounds)) {
       return std::nullopt;
     }
+    return bounds;
+  }
+
+  std::optional<View::DragFit> View::dragPhysicsFit() const {
+    const std::optional<wlr_box> bounds = dragPhysicsBounds();
+    if (!bounds) {
+      return std::nullopt;
+    }
     // The bounds are content-tree-local; the grab is frame-local.
     const auto grab = DragPhysics::grabIn(
-        static_cast<float>(bounds.x), static_cast<float>(bounds.y), static_cast<float>(bounds.width),
-        static_cast<float>(bounds.height), m_dragGrabX - m_contentTree->node.x, m_dragGrabY - m_contentTree->node.y
+        static_cast<float>(bounds->x), static_cast<float>(bounds->y), static_cast<float>(bounds->width),
+        static_cast<float>(bounds->height), m_dragGrabX - m_contentTree->node.x, m_dragGrabY - m_contentTree->node.y
     );
-    return DragFit{.bounds = bounds, .grab = grab};
+    return DragFit{.bounds = *bounds, .grab = grab};
   }
 
   bool View::dragPhysicsOn(const Output* output) const {
@@ -495,22 +631,68 @@ namespace umbriel {
 
   int View::dragPhysicsExpand() const { return static_cast<int>(std::ceil(m_dragPhysics.displacementBound())) + 2; }
 
+  bool View::dragPhysicsEnabled() const {
+    if (effectRegistry().deformationShader() == nullptr) {
+      return false;
+    }
+    switch (m_dragPhysicsMode) {
+    case DragPhysicsMode::Drag:
+      return config().animation.windowsDrag.physics;
+    case DragPhysicsMode::Resize:
+      return config().animation.windowsResize.physics;
+    case DragPhysicsMode::None:
+      return false;
+    }
+    return false;
+  }
+
+  void View::resetDragPhysics() {
+    m_dragPhysics = DragPhysics{};
+    m_dragResizeEdges = DragPhysics::ResizeEdge::None;
+    m_dragPhysicsMode = DragPhysicsMode::None;
+    if (m_dragSlotBound && m_contentTree != nullptr) {
+      wlr_scene_node_set_animation(&m_contentTree->node, FX_SLOT_DRAG, nullptr, nullptr);
+      m_dragSlotBound = false;
+    }
+  }
+
+  void View::wakeDragPhysics(bool wasActive) {
+    if (!m_dragPhysics.active()) {
+      return;
+    }
+    if (!wasActive) {
+      // Integration starts at the motion that wakes the sheet.
+      m_dragPhysicsMsec = static_cast<double>(m_server->animationClockMsec());
+    }
+    scheduleFrame();
+  }
+
   void View::moveDragPhysics(double dx, double dy) {
     if (!m_dragPhysics.grabbed()) {
       return;
     }
     const bool wasActive = m_dragPhysics.active();
     m_dragPhysics.move(static_cast<float>(dx), static_cast<float>(dy));
-    if (m_dragPhysics.active()) {
-      if (!wasActive) {
-        // Integration starts at the motion that wakes the sheet.
-        m_dragPhysicsMsec = static_cast<double>(m_server->animationClockMsec());
-      }
-      scheduleFrame();
-    }
+    wakeDragPhysics(wasActive);
   }
 
-  void View::endDragPhysics() { m_dragPhysics.release(); }
+  void View::endDragPhysics() {
+    m_dragPhysics.release();
+    // The resting re-home's wait covers the reparents the release issues.
+    m_releaseRehomeArmed = true;
+  }
+
+  void View::endResizePhysics() {
+    if (!dragPhysicsEnabled()) {
+      resetDragPhysics();
+      return;
+    }
+    stepResizePhysics();
+    if (!m_pointerResizeSettling) {
+      m_dragPhysics.release();
+      m_dragResizeEdges = DragPhysics::ResizeEdge::None;
+    }
+  }
 
   void View::restoreHomePresentation() {
     // The drag derived its own presented size and crop; drop them so the
@@ -522,7 +704,6 @@ namespace umbriel {
       m_ssdFrame->setBlurLive(false);
     }
     setFadeAlpha(m_fadeAlpha);
-    wlr_scene_node_place_below(&m_server->dragTree()->node, &m_server->dragIconTree()->node);
     if (m_pinned) {
       restorePinnedSceneParent();
       if (m_workspace != nullptr) {
@@ -568,9 +749,13 @@ namespace umbriel {
     const auto& animation = config().animation;
     const auto& resize = animation.windowsResize;
     if (!animation.enabled || !resize.enabled) {
+      const bool wasAnimating = m_presentation.animating();
       m_presentation.setSize(width, height);
       m_presentation.setRegion(width, height);
       applyPresentedSize();
+      if (wasAnimating) {
+        syncAnimationEffects();
+      }
       return;
     }
     m_presentation.animateTo(width, height, resize.durationMs, resize.curve);
@@ -586,9 +771,13 @@ namespace umbriel {
 
   void View::setLayoutTarget(int x, int y) {
     const bool changed = layoutTargetX() != x || layoutTargetY() != y;
+    const bool wasAnimating = m_posX.animating() || m_posY.animating();
     m_posX.snap(x);
     m_posY.snap(y);
     m_positioned = true;
+    if (wasAnimating) {
+      syncAnimationEffects();
+    }
     if (m_mapped && !m_tiled && changed) {
       m_server->scheduleIpcWindowsEvent();
     }
@@ -606,7 +795,7 @@ namespace umbriel {
   }
 
   void View::presentBox(const wlr_box& box) {
-    if ((tiledOpeningActive() || fullscreenOpeningActive()) && m_presentation.animating()) {
+    if ((tiledOpeningActive() || fullscreenOpeningActive() || floatingOpeningActive()) && m_presentation.animating()) {
       // windows_in owns lifecycle composition. A resize tween started by the admitting arrange would otherwise win
       // shader selection and apply a second windows_move over the workspace-owned logical presentation.
       m_presentation.setRegion(m_presentation.width(), m_presentation.height());
@@ -683,6 +872,7 @@ namespace umbriel {
             ? ClientSize{.width = surface->current.width, .height = surface->current.height}
             : ClientSize{},
     };
+    resizeTrace::configure("tiled", width, height, m_tiledSizeRequest->serial);
   }
 
   bool View::settleTiledSizeRequest() {
@@ -715,41 +905,6 @@ namespace umbriel {
     return true;
   }
 
-  void View::reassertTiledClientSize() {
-    if (m_toplevel == nullptr
-        || !m_mapped
-        || !m_tiled
-        || currentFullscreen()
-        || m_tiledSizeRequest
-        || configureOutstanding()) {
-      return;
-    }
-    const wlr_box content = committedContentBox();
-    const ClientSize scheduled = scheduledSize();
-    if (scheduled.width <= 0 || scheduled.height <= 0) {
-      return;
-    }
-    if (content.width == scheduled.width && content.height == scheduled.height) {
-      m_layoutFitSize = scheduled;
-      return;
-    }
-    if (m_reassertedClientSize
-        && m_reassertedClientSize->width == content.width
-        && m_reassertedClientSize->height == content.height) {
-      // It drew this layout size before and still answers it with its own: a dialog that sizes itself, so stop
-      // fighting it. A client that never drew the exact size (cell-rounded terminals) keeps its tile.
-      if (m_layoutFitSize && m_layoutFitSize->width == scheduled.width && m_layoutFitSize->height == scheduled.height) {
-        m_reassertedClientSize.reset();
-        setFloating(true, false);
-        requestFloatingSize(content.width, content.height);
-      }
-      return;
-    }
-    // Chromium's resizeTo commits a size of its own; ask once for the layout size.
-    m_reassertedClientSize = ClientSize{.width = content.width, .height = content.height};
-    (void)configureSize(scheduled.width, scheduled.height);
-  }
-
   void View::completeLayoutMotion(const wlr_box& target) {
     if (!m_layoutMotion && !m_layoutPresentationHeld) {
       return;
@@ -779,10 +934,115 @@ namespace umbriel {
     syncAnimationEffects();
   }
 
+  void View::beginMinimizeConceal() {
+    if (minimizeConcealing()) {
+      return;
+    }
+    const auto& animation = config().animation;
+    const auto& minimize = animation.windowsMinimize;
+    const auto [width, height] = floatingSize();
+    m_minimizeResting = {layoutTargetX(), layoutTargetY(), width, height};
+    m_minimizePhase = MinimizePhase::Concealing;
+    animateFadeTo(0.0F, minimize.durationMs, minimize.curve);
+    if (minimize.style == "popin" && width > 0 && height > 0) {
+      const wlr_box collapsed =
+          minimizeCollapseBox(m_minimizeResting, minimize.scale, floatingUsableArea(), minimize.anchor);
+      // The size tween makes the presentation layout-owned, so an arrange mid-flight cannot snap it back to the resting
+      // box; the position tween carries the node to the collapsed origin.
+      m_presentation.animateTo(collapsed.width, collapsed.height, minimize.durationMs, minimize.curve);
+      m_posX.retarget(collapsed.x, minimize.durationMs, minimize.curve);
+      m_posY.retarget(collapsed.y, minimize.durationMs, minimize.curve);
+    }
+    scheduleFrame();
+  }
+
+  void View::finishMinimizeConceal() {
+    if (!m_minimized) {
+      // A restore overtook the conceal: nothing is being hidden, so the window goes back to its resting box instead of
+      // disappearing while it reports itself visible.
+      abandonMinimizeTransition();
+      return;
+    }
+    m_minimizePhase = MinimizePhase::None;
+    setNodeEnabled(false);
+    // Below runs off screen, so the window returns to its resting box and full opacity without a visible snap.
+    setPosition(m_minimizeResting.x, m_minimizeResting.y);
+    finishSizeAnimation();
+    m_fade.snap(1.0);
+    setFadeAlpha(1.0F);
+  }
+
+  void View::beginMinimizeReveal() {
+    const auto& animation = config().animation;
+    const auto& minimize = animation.windowsMinimize;
+    const auto [width, height] = floatingSize();
+    // A conceal already retargeted the live box to its collapsed origin, so the resting box is the one it captured.
+    const bool reversing = minimizeConcealing();
+    const wlr_box captured = reversing && m_minimizeResting.width > 0
+        ? m_minimizeResting
+        : wlr_box{layoutTargetX(), layoutTargetY(), width, height};
+    m_minimizePhase = MinimizePhase::Revealing;
+    setNodeEnabled(true);
+    // A reversal always retargets the box: the conceal moved it, so a reload to `fade` mid-flight must not skip the
+    // tweens back.
+    const bool popin = captured.width > 0 && captured.height > 0 && (minimize.style == "popin" || reversing);
+    if (reversing) {
+      // Reverse from where the window is drawn; snapping to the collapsed box would jump.
+      m_fade.snap(m_fadeAlpha);
+    } else {
+      // Hidden at rest: grow out of the box it left.
+      setFadeAlpha(0.0F);
+      m_fade.snap(0.0);
+      if (popin) {
+        const wlr_box collapsed = minimizeCollapseBox(captured, minimize.scale, floatingUsableArea(), minimize.anchor);
+        m_presentation.setSize(collapsed.width, collapsed.height);
+        setScenePosition(collapsed.x, collapsed.y);
+        m_posX.snap(collapsed.x);
+        m_posY.snap(collapsed.y);
+      }
+    }
+    m_fade.retarget(1.0, minimize.durationMs, minimize.curve);
+    if (popin) {
+      m_presentation.animateTo(captured.width, captured.height, minimize.durationMs, minimize.curve);
+      m_posX.retarget(captured.x, minimize.durationMs, minimize.curve);
+      m_posY.retarget(captured.y, minimize.durationMs, minimize.curve);
+    }
+    scheduleFrame();
+  }
+
+  void View::abandonMinimizeTransition() {
+    if (!minimizeFadeActive()) {
+      return;
+    }
+    const bool wasHiding = minimizeConcealing();
+    m_minimizePhase = MinimizePhase::None;
+    m_fade.snap(1.0);
+    setFadeAlpha(1.0F);
+    if (!wasHiding) {
+      return;
+    }
+    // Put the node and the presented box back before the caller takes over, through the cancel path so no stale tween
+    // outlives it.
+    setPosition(m_minimizeResting.x, m_minimizeResting.y);
+    cancelSizeAnimation();
+  }
+
   void View::animateFadeTo(float toAlpha, int durationMs, const AnimationCurve& curve) {
+    m_fadeEvent.reset();
     m_customFade = m_inScratchpad && effectRegistry().animationEffect(AnimationEvent::Scratchpad) != nullptr;
     m_fade.snap(m_fadeAlpha);
     m_fade.retarget(toAlpha, durationMs, curve);
+    scheduleFrame();
+  }
+
+  void View::beginScratchpadRestoreFade(int durationMs, const AnimationCurve& curve) {
+    // The view has already left the pad, so `m_inScratchpad` can no longer choose the event: the restore is the second
+    // half of the pad's fade and keeps its slot, its effect and its curve.
+    m_fadeEvent = AnimationEvent::Scratchpad;
+    m_customFade = effectRegistry().animationEffect(AnimationEvent::Scratchpad) != nullptr;
+    setFadeAlpha(0.0F);
+    m_fade.snap(0.0);
+    m_fade.retarget(1.0, durationMs, curve);
     scheduleFrame();
   }
 
@@ -799,6 +1059,10 @@ namespace umbriel {
   }
 
   void View::animateTo(int x, int y) {
+    // A conceal owns the node's position until its fade lands.
+    if (minimizeConcealing()) {
+      return;
+    }
     if (m_mapped && !m_tiled && (layoutTargetX() != x || layoutTargetY() != y)) {
       m_server->scheduleIpcWindowsEvent();
     }
@@ -813,8 +1077,12 @@ namespace umbriel {
     const int fromX = layoutX();
     const int fromY = layoutY();
     if (fromX == x && fromY == y) {
+      const bool wasAnimating = m_posX.animating() || m_posY.animating();
       m_posX.snap(x);
       m_posY.snap(y);
+      if (wasAnimating) {
+        syncAnimationEffects();
+      }
       return;
     }
     const auto& animation = config().animation;
@@ -850,10 +1118,16 @@ namespace umbriel {
     if (target == nullptr) {
       return;
     }
+    // A fade that has finished no longer owns its event: the view goes back to the slot its membership chooses, so a
+    // later opening or pad fade binds its own program. The binding below then clears the slot the override used.
+    if (m_fadeEvent && !m_fade.animating()) {
+      m_fadeEvent.reset();
+    }
     if (!m_mapped) {
       wlr_scene_node_clear_animations(&target->node);
       if (ownTrees) {
         m_dragSlotBound = false;
+        m_effectSyncGeneration = effectRegistry().generation();
       }
       if (border != nullptr) {
         wlr_scene_node_clear_animations(border);
@@ -861,7 +1135,10 @@ namespace umbriel {
       m_effects.detach();
       return;
     }
-    if (m_posX.animating() || m_posY.animating() || m_presentation.animating()) {
+    // A minimize transition deforms its own box, so no `windows_move` preset warps it on top.
+    if (minimizeFadeActive()) {
+      clearAnimationEffect(&target->node, AnimationEvent::WindowsMove);
+    } else if (m_posX.animating() || m_posY.animating() || m_presentation.animating()) {
       const auto& movement = m_posX.animating() ? m_posX : (m_posY.animating() ? m_posY : m_presentation.animation());
       bindAnimationEffect(&target->node, AnimationEvent::WindowsMove, movement);
     } else if (
@@ -872,6 +1149,9 @@ namespace umbriel {
       bindAnimationEffect(&target->node, AnimationEvent::WindowsMove, *motion, m_layoutMotionDirection);
     } else {
       bindAnimationEffect(&target->node, AnimationEvent::WindowsMove, m_presentation.animation());
+    }
+    if (ownTrees && (m_dragPhysics.active() || m_dragPhysics.grabbed()) && !dragPhysicsEnabled()) {
+      resetDragPhysics();
     }
     // Only the view's own content tree deforms; overview cards stay rigid.
     if (ownTrees && m_dragPhysics.active()) {
@@ -896,9 +1176,18 @@ namespace umbriel {
       m_dragSlotBound = false;
     }
     bindAnimationEffect(&target->node, AnimationEvent::DimUnfocused, m_focusDim);
-    bindAnimationEffect(&target->node, m_inScratchpad ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn, m_fade);
+    const AnimationEvent fade = fadeEvent();
+    if (fade == AnimationEvent::Scratchpad || !minimizeFadeActive()) {
+      bindAnimationEffect(&target->node, fade, m_fade);
+    } else {
+      // Drop a shader an earlier open bound to this node; minimize has no effect slot of its own.
+      clearAnimationEffect(&target->node, fade);
+    }
     wlr_scene_node_set_animation(
-        &target->node, static_cast<unsigned>(m_inScratchpad ? AnimationEvent::WindowsIn : AnimationEvent::Scratchpad),
+        &target->node,
+        static_cast<unsigned>(
+            fade == AnimationEvent::Scratchpad ? AnimationEvent::WindowsIn : AnimationEvent::Scratchpad
+        ),
         nullptr, nullptr
     );
     bindAnimationEffect(border, AnimationEvent::Border, m_borderColorAnim, m_borderFocusedState ? 1.0F : -1.0F);
@@ -932,24 +1221,36 @@ namespace umbriel {
           .outputBox = output != nullptr ? output->layoutBox() : wlr_box{},
       });
     }
+    if (ownTrees) {
+      // tickAnimations skips re-syncs while the registry generation stands
+      // still; record what this sync actually applied so a direct mutator's
+      // sync is not repeated on the next tick.
+      m_effectSyncGeneration = effectRegistry().generation();
+    }
   }
 
   bool View::tickAnimations(double nowMsec) {
     bool active = false;
     bool openingFinished = false;
+    // Did anything move this frame? Effect bindings carry a copy of each
+    // animation's progress, so only progressing state needs a re-sync.
+    bool progressed = false;
 
     // Disable sibling size animations during a tiled resize, so they do not
     // trail the pointer while clients acknowledge successive configures.
     const Cursor* cursor = m_server->cursor();
     if (cursor != nullptr
+        && m_tiled
+        && !scheduledFullscreen()
+        && !currentFullscreen()
         && cursor->isResizingWorkspace(m_workspace)
-        && !tiledResizeWaitsForClient()
         && sizeAnimating()) {
       cancelSizeAnimation();
     }
 
     const bool movedX = m_posX.tick(nowMsec);
     const bool movedY = m_posY.tick(nowMsec);
+    progressed = movedX || movedY;
     // A carried-speed spring settles on its own solver; stop it once no pixel can change.
     static_cast<void>(m_posX.finishSpringTail(1.0));
     static_cast<void>(m_posY.finishSpringTail(1.0));
@@ -967,6 +1268,7 @@ namespace umbriel {
     }
 
     if (m_presentation.tick(nowMsec)) {
+      progressed = true;
       applyPresentedSize();
       if (Overview* overview = m_server->overview(); overview != nullptr && overview->active()) {
         overview->onViewPresentationChanged(this);
@@ -981,12 +1283,11 @@ namespace umbriel {
     }
 
     if (m_fade.tick(nowMsec)) {
-      m_customFade = m_customFade
-          && m_fade.animating()
-          && effectRegistry().animationEffect(m_inScratchpad ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn)
-              != nullptr;
+      progressed = true;
+      m_customFade = m_customFade && m_fade.animating() && effectRegistry().animationEffect(fadeEvent()) != nullptr;
       const float rawAlpha = std::clamp(static_cast<float>(m_fade.current()), 0.0F, 1.0F);
-      const bool builtInSlide = !m_inScratchpad
+      const bool builtInSlide = fadeEvent() == AnimationEvent::WindowsIn
+          && !minimizeFadeActive()
           && !m_customFade
           && config().animation.windowsIn.style == "slide"
           && effectRegistry().animationEffect(AnimationEvent::WindowsIn) == nullptr;
@@ -999,19 +1300,36 @@ namespace umbriel {
       // opener can instead receive intermediate logical boxes from windows_move. Popin/zoom applies its inset to either
       // box, and a custom shader stays composed over the lifecycle presentation.
       const bool finishingTiledOpen = m_mapped
-          && !m_inScratchpad
+          && fadeEvent() == AnimationEvent::WindowsIn
           && m_tiled
           && !layoutFullscreen()
           && m_workspace != nullptr
           && m_workspace->layout().columnOf(this) >= 0
           && m_fade.target() > m_fade.from();
       // A fullscreen opener is presented inside the output box its layout assigned, which the arrange that follows
-      // its map owns. Styles without an inset leave the node where that arrange put it.
-      const bool insetFullscreenOpen =
-          openingInsetPending() && m_mapped && !m_inScratchpad && layoutFullscreen() && m_fade.target() > m_fade.from();
+      // its map owns, and a floating one inside its position at the size its client draws now. Styles without an inset
+      // leave the node where it rests.
+      const bool insetFullscreenOpen = openingInsetPending()
+          && m_mapped
+          && fadeEvent() == AnimationEvent::WindowsIn
+          && layoutFullscreen()
+          && m_fade.target() > m_fade.from();
+      const bool insetFloatingOpen = openingInsetPending()
+          && m_mapped
+          && fadeEvent() == AnimationEvent::WindowsIn
+          && !m_tiled
+          && !layoutFullscreen()
+          && m_fade.target() > m_fade.from();
       if (insetFullscreenOpen) {
         if (fullscreenOpeningActive()) {
           presentBox(fullscreenLayoutBox());
+        } else {
+          dropOpeningInset();
+          finishSizeAnimation();
+        }
+      } else if (insetFloatingOpen) {
+        if (floatingOpeningActive()) {
+          presentBox(floatingOpeningBox());
         } else {
           dropOpeningInset();
           finishSizeAnimation();
@@ -1025,15 +1343,28 @@ namespace umbriel {
         }
       }
       active = active || m_fade.animating();
-      openingFinished = m_mapped && !m_inScratchpad && !m_fade.animating() && m_fade.target() > m_fade.from();
+      openingFinished = m_mapped
+          && fadeEvent() == AnimationEvent::WindowsIn
+          && !m_fade.animating()
+          && m_fade.target() > m_fade.from();
+    }
+    if (!m_fade.animating() && minimizeFadeActive()) {
+      if (minimizeConcealing()) {
+        finishMinimizeConceal();
+      } else {
+        m_minimizePhase = MinimizePhase::None;
+      }
+      active = true;
     }
     if (m_focusDim.tick(nowMsec)) {
+      progressed = true;
       setFadeAlpha(m_fadeAlpha);
       active = active || m_focusDim.animating();
     }
     const bool opacityChanged = m_ruleOpacity.tick(nowMsec);
     const bool blurChanged = m_ruleBlur.tick(nowMsec);
     if (opacityChanged || blurChanged) {
+      progressed = true;
       setFadeAlpha(m_fadeAlpha);
       m_presentation.setFullscreenOpaque(fullscreenOpaque());
       updateBlur();
@@ -1043,6 +1374,7 @@ namespace umbriel {
       active = active || m_ruleOpacity.animating() || m_ruleBlur.animating();
     }
     if (m_modalShadeAlpha.tick(nowMsec)) {
+      progressed = true;
       syncModalShade();
       active = active || m_modalShadeAlpha.animating();
     }
@@ -1050,28 +1382,68 @@ namespace umbriel {
     const bool innerChanged = m_borderColorAnim.tick(nowMsec);
     const bool outerChanged = m_outerBorderColorAnim.tick(nowMsec);
     if (innerChanged || outerChanged) {
+      progressed = true;
       applyBorderColors();
       active = active || m_borderColorAnim.animating() || m_outerBorderColorAnim.animating();
     }
     if (m_dragPhysics.active() || m_dragPhysics.grabbed()) {
-      if (effectRegistry().deformationShader() == nullptr) {
+      if (!dragPhysicsEnabled()) {
         // Without the program (physics turned off), the window stays rigid for the rest of the drag.
-        m_dragPhysics = DragPhysics{};
-      } else if (m_dragPhysics.active()) {
-        fitDragPhysics(false);
-        // The vblank a frame ticks from can precede the instant the sheet woke, so a step never runs backwards.
-        const double elapsed = std::max(0.0, nowMsec - m_dragPhysicsMsec);
-        m_dragPhysicsMsec = std::max(m_dragPhysicsMsec, nowMsec);
-        // The stall guard compares against the output's refresh period; 0 when the output reports none.
-        const Output* output = currentOutput();
-        const int refreshMhz = output != nullptr ? output->wlr()->refresh : 0;
-        const double cadenceS = refreshMhz > 0 ? 1000.0 / refreshMhz : 0.0;
-        active = m_dragPhysics.tick(elapsed / 1000.0, cadenceS) || active;
+        resetDragPhysics();
+      } else {
+        if (m_dragResizeEdges != DragPhysics::ResizeEdge::None) {
+          stepResizePhysics();
+        } else {
+          fitDragPhysics(false);
+        }
+        if (m_dragPhysics.active()) {
+          // The vblank a frame ticks from can precede the instant the sheet woke, so a step never runs backwards.
+          const double elapsed = std::max(0.0, nowMsec - m_dragPhysicsMsec);
+          m_dragPhysicsMsec = std::max(m_dragPhysicsMsec, nowMsec);
+          // The stall guard compares against the output's refresh period; 0 when the output reports none.
+          const Output* output = currentOutput();
+          const int refreshMhz = output != nullptr ? output->wlr()->refresh : 0;
+          const double cadenceS = refreshMhz > 0 ? 1000.0 / refreshMhz : 0.0;
+          const bool stillActive = m_dragPhysics.tick(elapsed / 1000.0, cadenceS);
+          active = stillActive || active;
+          progressed = true;
+          if (!stillActive && !m_dragPhysics.grabbed()) {
+            m_dragPhysicsMode = DragPhysicsMode::None;
+          }
+        }
       }
     }
     if (openingFinished) {
       releaseOpeningPresentation(true);
       active = hasActiveAnimations() || active;
+      // The release re-adopts the client size and drops the opening inset;
+      // refresh the bindings even though no tween reported progress.
+      progressed = true;
+    }
+    // A bound drag slot, live layout motion, an unmapped view, persistent
+    // effects (whose apply carries the clock), or a registry move re-syncs
+    // every pass until settled.
+    if (progressed
+        || m_dragSlotBound
+        || m_layoutMotion
+        || !m_mapped
+        || m_effects.configured()
+        || m_effectSyncGeneration != effectRegistry().generation()) {
+      syncAnimationEffects();
+    }
+    // The wait lands in the tick the spring settles (a later tick may never come),
+    // or earlier while the overview needs the home tree. A displaced view always
+    // animates on some output, so this backstop cannot starve.
+    m_releaseRehomeArmed = false;
+    if (m_pendingHomeParent != nullptr
+        && (!dragSheetDisplaced() || (m_server->overview() != nullptr && m_server->overview()->active()))) {
+      flushReleaseRehome();
+      if (m_workspace != nullptr && !m_pinned) {
+        m_workspace->restackFloatingViews();
+        if (m_mapped) {
+          m_workspace->syncViewPresentation(this);
+        }
+      }
     }
     syncAnimationEffects();
     if (!active && m_mapped && m_xsurface != nullptr) {
@@ -1098,6 +1470,7 @@ namespace umbriel {
         || m_posY.animating()
         || sizeAnimating()
         || m_fade.animating()
+        || minimizeConcealing()
         || m_borderColorAnim.animating()
         || m_outerBorderColorAnim.animating()
         || m_ruleOpacity.animating()
@@ -1121,7 +1494,7 @@ namespace umbriel {
     return fullArea;
   }
 
-  CloseSnapshotId View::beginCloseAnimation() {
+  CloseSnapshotId View::beginCloseAnimation(Workspace* resolvedWorkspace) {
     const auto& animation = config().animation;
     const bool held = m_tiled && m_workspace != nullptr && animation.holdsClosedTile();
     if (!m_mapped
@@ -1132,7 +1505,7 @@ namespace umbriel {
         || (m_server->overview() != nullptr && m_server->overview()->active())) {
       return kInvalidCloseSnapshot;
     }
-    return captureSnapshot(held, true);
+    return captureSnapshot(held, true, resolvedWorkspace);
   }
 
   CloseSnapshotId View::captureHeldSnapshot() {
@@ -1146,16 +1519,20 @@ namespace umbriel {
     return captureSnapshot(true, false);
   }
 
-  CloseSnapshotId View::captureSnapshot(bool held, bool withShadow) {
+  CloseSnapshotId View::captureSnapshot(bool held, bool withShadow, Workspace* resolvedWorkspace) {
+    // A dialog has no workspace of its own, so its pad was resolved before the attachment link was released.
+    Workspace* workspace = resolvedWorkspace != nullptr ? resolvedWorkspace : m_workspace;
     Output* output =
-        m_workspace != nullptr && m_workspace->group() != nullptr ? m_workspace->group()->output() : currentOutput();
+        workspace != nullptr && workspace->group() != nullptr ? workspace->group()->output() : currentOutput();
     if (output == nullptr) {
       return kInvalidCloseSnapshot;
     }
 
     // Under the output's clipped root, so a snapshot of a view straddling the shared edge stays contained while it
-    // fades. Server::removeOutput purges this output's snapshots before the Output is destroyed. The tree remains at
-    // the captured presented box in output-root coordinates; the buffers keep their offsets inside the content subtree.
+    // fades; a scratchpad snapshot is reparented below into the pad's tree, whose clip (or lack of one) the live member
+    // already follows. Server::removeOutput purges this output's snapshots before the Output is destroyed. The tree
+    // remains at the captured presented box in output-root coordinates; the buffers keep their offsets inside the
+    // content subtree.
     wlr_scene_tree* snap = wlr_scene_tree_create(output->viewRoot());
     if (snap == nullptr) {
       return kInvalidCloseSnapshot;
@@ -1247,6 +1624,21 @@ namespace umbriel {
         output, snap, content, std::move(snapBorders), m_presentedBox,
         held ? std::optional{Server::CloseSnapshotOverrides{.held = true}} : std::nullopt, shadow, titleBarHeight()
     );
+    // A pad draws its members above its dim rect and blur, so a fading member joins the pad's own tree. The pad
+    // workspace then hides and fades it with the pad.
+    if (id != kInvalidCloseSnapshot && workspace != nullptr && workspace->scratchpad()) {
+      if (wlr_scene_tree* padTree = workspace->tree(); padTree != nullptr) {
+        if (shadow.tree != nullptr) {
+          wlr_scene_node_reparent(&shadow.tree->node, padTree);
+        }
+        wlr_scene_node_reparent(&snap->node, padTree);
+      }
+      // The copied buffers and chrome already carry the pad's fade as it stood here; the pad's later fades apply
+      // relative to this, so an interrupted show does not attenuate the capture twice.
+      if (const ScratchpadManager* scratchpads = m_server->scratchpadManager(); scratchpads != nullptr) {
+        m_server->setCloseSnapshotFadeReference(id, scratchpads->fadeFor(workspace));
+      }
+    }
     wlr_output_schedule_frame(output->wlr());
     return id;
   }
@@ -1320,7 +1712,14 @@ namespace umbriel {
   }
 
   void View::applyPresentation(const wlr_box& target) {
-    updateFullscreenPresentation(target.width, target.height);
+    // Only a running size animation or interactive resize scales the buffer. At rest, and while a layout motion only
+    // moves the window, a tile's buffer is drawn 1:1, centered in the tile when it is smaller.
+    const bool layoutResizing = m_layoutMotion && m_workspace != nullptr && m_workspace->layoutSizeAnimating();
+    const bool stretch = m_presentation.animating()
+        || layoutResizing
+        || openingInsetActive()
+        || sizeGrabActive()
+        || m_floating.pendingSize();
     const wlr_box& geometry = geometryBox();
     // Stay inside the tile while geometry lags configure (Electron often stays wide).
     const wlr_box content{
@@ -1329,6 +1728,13 @@ namespace umbriel {
         .width = presentedWidth(target),
         .height = presentedHeight(target),
     };
+    // Fullscreen centers in the output tile; a tile centers in the box it is presented at, which a held or moving
+    // window keeps at its starting size.
+    if (currentFullscreen()) {
+      updateFullscreenPresentation(target.width, target.height);
+    } else {
+      updateFullscreenPresentation(content.width, content.height, m_tiled && !stretch);
+    }
     if (currentFullscreen()) {
       // The backdrop is the window's own letterbox, so it follows the presented box rather than the tile: a window
       // scaling into or out of fullscreen carries its surround instead of sitting in an output-wide one. The output's
@@ -1346,18 +1752,13 @@ namespace umbriel {
         .width = content.width,
         .height = content.height,
     };
-    const bool committedSize = presentsCommittedSize();
-    if (committedSize && m_presentedCropActive) {
+    if (!stretch && m_presentedCropActive) {
       // The clip below crops 1:1, but an unchanged clip box would keep the scaled crop programmed before.
       resetPresentedSurface();
     }
     setSurfaceTreeClip(&surfaceClip);
     applyCornerRadius();
-    if (!committedSize
-        && (layoutPresentationOwned()
-            || sizeGrabActive()
-            || m_floating.pendingSize()
-            || (openingAnimationActive() && m_openingFloatingSize))) {
+    if (stretch) {
       // The clip crops 1:1 in surface coordinates and caps the destination at the committed surface size, so it cannot
       // express an animated or interactive presented size. Program the buffer directly; the clip above keeps the buffer
       // node positioned at the visible box origin.

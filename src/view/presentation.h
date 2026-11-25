@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/animation.h"
+#include "view/presented_crop.h"
 
 extern "C" {
 #include <wlr/util/box.h>
@@ -52,21 +53,23 @@ namespace umbriel {
     void setBackdropBox(int x, int y, int width, int height);
     // Re-read the backdrop color after a config reload.
     void reloadBackdropColor();
-    // Offsets centering a client buffer that does not match the output. Negative
-    // for an oversized buffer, which crops it equally on both sides.
+    // Offsets placing a client buffer that does not match its box: centered in a fullscreen output, negative for an
+    // oversized buffer, which crops it equally on both sides; centered in a tile when smaller than it.
     int offsetX() const { return m_offsetX; }
     int offsetY() const { return m_offsetY; }
     // Follows the client's *committed* fullscreen state, never the scheduled intent: a client mid mode-change (wine)
-    // would otherwise render as a stale buffer wearing fullscreen chrome.
+    // would otherwise render as a stale buffer wearing fullscreen chrome. Outside fullscreen, a nonzero `centered`
+    // size is drawn content smaller than the tile to center in it.
     void updateFullscreen(
-        bool fullscreen, int tileWidth, int tileHeight, wlr_scene_node* surfaceNode, const wlr_box& geometry
+        bool fullscreen, int tileWidth, int tileHeight, wlr_scene_node* surfaceNode, const wlr_box& geometry,
+        int centeredWidth = 0, int centeredHeight = 0
     );
 
     // Present the buffer at the animated size. `content` and `surfaceClip` use surface coordinates. A scene clip
     // alone cannot express this, because it crops 1:1 and caps the destination at the committed surface size.
     void applyCrop(
         wlr_scene_tree* tree, wlr_surface* surface, const wlr_box& geometry, const wlr_box& content,
-        const wlr_box& surfaceClip
+        const wlr_box& surfaceClip, ShrinkSampling shrink
     ) const;
     // Undo applyCrop: real buffer size, no source box.
     void resetCrop(wlr_scene_tree* tree, wlr_surface* surface) const;
@@ -83,5 +86,10 @@ namespace umbriel {
     bool m_fullscreenSized = false;
     bool m_fullscreenOpaque = true;
   };
+
+  // The box a minimizing window collapses to: `resting` scaled to `scale`, with `center` holding the resting centre
+  // and the other anchors putting that edge of the scaled box on the matching edge of `usable`. Never smaller than one
+  // pixel, so the presented box stays valid at every scale.
+  wlr_box minimizeCollapseBox(const wlr_box& resting, double scale, const wlr_box& usable, MinimizeAnchor anchor);
 
 } // namespace umbriel
