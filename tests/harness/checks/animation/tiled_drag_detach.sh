@@ -51,25 +51,19 @@ duration_ms = 400
 curve = "linear"
 EOF
   "$UMBRIEL" msg config-reload > /dev/null
+  "$UMBRIEL" msg workspace-set-layout "$mode" > /dev/null
 }
 
 spawn() {
   local title=$1 color=$2
-  FILL_COLOR="$color" "$UMBRIEL_UNMAP_CLIENT" "$title" 640 720 > "$UMBRIEL_RUNTIME_DIR/$title.log" 2>&1 &
-  for _ in $(seq 80); do
-    if "$UMBRIEL" windows --json | jq -e --arg title "$title" 'any(.[]; .title == $title)' > /dev/null; then
-      return 0
-    fi
-    sleep 0.025
-  done
-  echo "timed out waiting for $title"
-  return 1
+  FOLLOW_CONFIGURES=1 FILL_COLOR="$color" "$UMBRIEL_UNMAP_CLIENT" "$title" 640 720 > "$UMBRIEL_RUNTIME_DIR/$title.log" 2>&1 &
+  await_window "$title"
 }
 
-# Measure the red survivor on a top strip (y=48..55). Dragging the blue window downward moves its top edge well below
-# y=55 so the red survivor stays unobstructed throughout the drag. Use a dominance predicate so a translucent drop
+# Measure the red survivor on a top strip (y=10..17). Dragging the blue window downward moves its top edge well below
+# y=17 so the red survivor stays unobstructed throughout the drag. Use a dominance predicate so a translucent drop
 # hint overlay does not mask the red window.
-readonly RED_EXPR='r > 0.5 && g < 0.4 && b < 0.4'
+readonly RED_EXPR='r > 0.6 && g < 0.45'
 
 red_strip_width() {
   local region=$1
@@ -88,7 +82,7 @@ spawn drag-detach-right 0xFFFF0000
 "$UMBRIEL" settle
 
 # Case 1: Scrolling layout — dragging the left tile out animates the right tile leftward via animation.windows_move.
-before_left=$(red_strip_width 720x8+0+48)
+before_left=$(red_strip_width 640x8+0+10)
 if ((before_left > 16)); then
   echo "expected left region to have no red before drag in scrolling: before_left=$before_left"
   exit 1
@@ -96,12 +90,12 @@ fi
 
 pointer_hold "$OUTPUT_W" "$OUTPUT_H" move 100 360 mod logo press "$BTN_LEFT" move 1200 600 -- release "$BTN_LEFT" mod none
 "$UMBRIEL" clock-advance 320
-w1=$(red_strip_width 720x8+0+48)
+w1=$(red_strip_width 640x8+0+10)
 "$UMBRIEL" clock-advance 40
-w2=$(red_strip_width 720x8+0+48)
+w2=$(red_strip_width 640x8+0+10)
 "$UMBRIEL" clock-advance 500
 "$UMBRIEL" settle
-final_left=$(red_strip_width 720x8+0+48)
+final_left=$(red_strip_width 640x8+0+10)
 pointer_release
 "$UMBRIEL" clock-advance 1000
 "$UMBRIEL" settle
@@ -115,21 +109,21 @@ blue_center() {
   "$UMBRIEL" windows --json | jq -r '.[] | select(.title == "drag-detach-left") | "\((.x + .w / 2) | floor) \((.y + .h / 2) | floor)"'
 }
 
-# Case 2: Dwindle layout — dragging the blue tile out animates the red tile leftward to fill the freed space.
+# Case 2: Dwindle layout — dragging the blue tile out animates the red tile's width across the output to fill the freed space.
 write_config dwindle true true
 "$UMBRIEL" clock-advance 1000
 "$UMBRIEL" settle
 
-before_w=$(red_strip_width 720x8+0+48)
+before_w=$(red_strip_width "${OUTPUT_W}x8+0+10")
 read -r bx by <<< "$(blue_center)"
 pointer_hold "$OUTPUT_W" "$OUTPUT_H" move "$bx" "$by" mod logo press "$BTN_LEFT" move 1200 600 -- move 100 600 release "$BTN_LEFT" mod none
 "$UMBRIEL" clock-advance 320
-w1=$(red_strip_width 720x8+0+48)
+w1=$(red_strip_width "${OUTPUT_W}x8+0+10")
 "$UMBRIEL" clock-advance 40
-w2=$(red_strip_width 720x8+0+48)
+w2=$(red_strip_width "${OUTPUT_W}x8+0+10")
 "$UMBRIEL" clock-advance 500
 "$UMBRIEL" settle
-final_w=$(red_strip_width 720x8+0+48)
+final_w=$(red_strip_width "${OUTPUT_W}x8+0+10")
 pointer_release
 "$UMBRIEL" clock-advance 1000
 "$UMBRIEL" settle
@@ -144,14 +138,14 @@ write_config dwindle false false
 "$UMBRIEL" clock-advance 1000
 "$UMBRIEL" settle
 
-before_snap=$(red_strip_width 720x8+0+48)
+before_snap=$(red_strip_width "${OUTPUT_W}x8+0+10")
 read -r bx by <<< "$(blue_center)"
 pointer_hold "$OUTPUT_W" "$OUTPUT_H" move "$bx" "$by" mod logo press "$BTN_LEFT" move 1200 600 -- move 100 600 release "$BTN_LEFT" mod none
 "$UMBRIEL" clock-advance 50
-w_snap=$(red_strip_width 720x8+0+48)
+w_snap=$(red_strip_width "${OUTPUT_W}x8+0+10")
 "$UMBRIEL" clock-advance 500
 "$UMBRIEL" settle
-w_snap_final=$(red_strip_width 720x8+0+48)
+w_snap_final=$(red_strip_width "${OUTPUT_W}x8+0+10")
 pointer_release
 "$UMBRIEL" clock-advance 1000
 "$UMBRIEL" settle
