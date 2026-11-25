@@ -83,7 +83,7 @@ Each event other than `windows_drag` also accepts `enabled`, `duration_ms`, and 
 | `[animation.windows_out]`      | `style`, `scale`                                                    | Window closing                                             |
 | `[animation.windows_minimize]` | `style`, `scale`, `anchor`, and no `effect`                         | Floating window minimizing and restoring                   |
 | `[animation.windows_move]`     | none                                                                | Position during moves, reflow, maximize, and restore       |
-| `[animation.windows_resize]`   | none, and no `effect`                                               | Size during the same changes                               |
+| `[animation.windows_resize]`   | `physics`, and no `effect`                                          | Size during the same changes                               |
 | `[animation.windows_opacity]`  | none, and no `effect`                                               | Focus changes to window-rule opacity and backdrop blur     |
 | `[animation.workspaces]`       | `style`                                                             | Workspace switching                                        |
 | `[animation.overview]`         | `workspace_curve`                                                   | Overview opening, closing, and filmstrip movement          |
@@ -99,8 +99,6 @@ Each event other than `windows_drag` also accepts `enabled`, `duration_ms`, and 
 `windows_in` accepts `popin`, `zoom`, `slide`, `fade`, or `none`. `windows_out` accepts `fade`, `slide`, `popin`, or `zoom`. `workspaces` accepts `slide` or `reveal` (see [Workspace reveal](#workspace-reveal)). `scale` applies to `popin`: an opening window grows from it to full size, and a closing window shrinks toward it, while both fade.
 
 `windows_move` moves a window while `windows_resize` changes its size, so a slow move can still resize quickly. While the size animates, the window's latest frame is stretched to fit. With `windows_resize` disabled, the size changes at once while the window still moves. When the two timelines differ, a window can briefly overlap its neighbours during a reflow. Borders and shadows follow the layout's size even when the application has not redrawn yet. A tiled window that settles smaller than its tile, such as a terminal sized to whole character cells or a browser popup that sizes itself, keeps its own size and is centered in the tile, leaving a transparent margin inside its border.
-
-A client needs a few frames to redraw at a new size, so a layout change that resizes windows waits for it. The screen keeps showing every window as it was, with a newly opened window not yet visible, until each resized window has redrawn, at its new size or at a nearby size it picks itself, as terminals that size to whole character cells do. A newly opened window whose first frame does not fit its tile stays hidden the same way until it has answered its tile's size. The windows then move and resize from where they were, or, with `windows_move` disabled, appear in their final place and size in the same frame. A slow or unresponsive client is waited for at most 150 ms; a window that never redraws is shown at the size it last drew, never stretched to its tile. Resizing a tile with the mouse does not wait: the tile follows the pointer and shows the window's frame as the application drew it.
 
 When a tiled window closes while `windows_out` is disabled, its last frame stays on screen until the windows filling its space have redrawn, so the wallpaper never shows there.
 
@@ -220,6 +218,8 @@ The tuning keys shape the sheet; out-of-range values are clamped to their range 
 | `settle_after_pause_s` | 0.25    | 0.1 to 5.0     | Rendering pause after which the sheet snaps back to rest. Ordinary frames never trigger it at any refresh rate. |
 
 Only the window's own content deforms; its drop shadow follows that deformation within the window's shadow bounds. Re-grabbing a window while it settles continues its motion. Under the default `popin` style, or under `zoom`, the closing snapshot's clip grows by the deformation margin, so a client-side decoration extending past the window's geometry can remain visible within that margin while the snapshot fades.
+
+Setting `physics = true` under `[animation.windows_resize]` (default `false`) applies the same elastic sheet to floating pointer resizes (tiled resizes stay rigid). It pins the opposite corner on a corner grab or the midpoint of the opposite edge on a straight-edge grab, loads the sheet from each committed size step of the window so the dragged edge trails the growth and relaxes after release, shares the tuning keys under `[animation.windows_drag]`, and runs whenever `[animation] enabled` is true—even if `[animation.windows_resize] enabled = false` (which governs layout-driven size animations).
 
 ## Workspace reveal
 

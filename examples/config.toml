@@ -519,6 +519,9 @@ action = "overview-open"
 # style = "popin"           # Or "fade"
 # scale = 0.5
 # anchor = "center"         # Or "left", "right", "top_center", "bottom_center"
+# Deform a floating window like an elastic sheet during pointer resizes.
+# [animation.windows_resize]
+# physics = false
 
 # Optional live workspace reveal (see docs/user/animation.md).
 # Add the bundled effects/animation/workspace_wipe/effect.toml to your includes.
