@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/animation.h"
+#include "view/presented_crop.h"
 
 extern "C" {
 #include <wlr/util/box.h>
@@ -68,7 +69,7 @@ namespace umbriel {
     // alone cannot express this, because it crops 1:1 and caps the destination at the committed surface size.
     void applyCrop(
         wlr_scene_tree* tree, wlr_surface* surface, const wlr_box& geometry, const wlr_box& content,
-        const wlr_box& surfaceClip
+        const wlr_box& surfaceClip, ShrinkSampling shrink
     ) const;
     // Undo applyCrop: real buffer size, no source box.
     void resetCrop(wlr_scene_tree* tree, wlr_surface* surface) const;

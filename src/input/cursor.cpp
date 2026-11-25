@@ -20,6 +20,7 @@
 #include "scene/quit_confirm.h"
 #include "scene/ssd_frame.h"
 #include "server/server.h"
+#include "view/resize_trace.h"
 #include "view/size_hints.h"
 #include "view/view.h"
 // clang-format off
@@ -1183,7 +1184,7 @@ namespace umbriel {
   }
 
   bool Cursor::beginResize(View* view, uint32_t edges, uint32_t button) {
-    if (view == nullptr || !view->mapped() || button == 0) {
+    if (view == nullptr || !view->mapped() || button == 0 || view->scheduledFullscreen() || view->currentFullscreen()) {
       return false;
     }
     if (!isPassthrough()) {
@@ -1239,9 +1240,7 @@ namespace umbriel {
       return false;
     }
     setActiveConstraint(nullptr);
-    if (view->maximizedToEdges()) {
-      view->setMaximizedToEdges(false, false);
-    }
+    view->dropMaximizedForResize();
 
     const wlr_box& presented = view->presentedBox();
     const wlr_box geometry{view->layoutX(), view->layoutY(), presented.width, presented.height};
@@ -1422,6 +1421,7 @@ namespace umbriel {
     const auto* floatingResize = std::get_if<FloatingResizeGrab>(&m_grab);
     const bool restoreResizePresentation = floatingResize != nullptr;
     if (floatingResize != nullptr && floatingResize->view != nullptr) {
+      flushResizeTarget();
       floatingResize->view->finishFloatingResize();
       if (floatingResize->physics) {
         floatingResize->view->endResizePhysics();
@@ -1478,6 +1478,11 @@ namespace umbriel {
     const auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
     if (grab != nullptr
         && (grab->workspace == nullptr
+            || grab->view == nullptr
+            || !grab->view->tiled()
+            || grab->view->workspace() != grab->workspace
+            || grab->view->scheduledFullscreen()
+            || grab->view->currentFullscreen()
             || grab->session == nullptr
             || grab->session->ownerLayout() != &grab->workspace->layout())) {
       resetMode();
@@ -3475,7 +3480,11 @@ namespace umbriel {
 
   void Cursor::processResize() {
     auto* grab = std::get_if<FloatingResizeGrab>(&m_grab);
-    if (grab == nullptr || grab->view == nullptr) {
+    if (grab == nullptr
+        || grab->view == nullptr
+        || !grab->view->floating()
+        || grab->view->scheduledFullscreen()
+        || grab->view->currentFullscreen()) {
       resetMode();
       return;
     }
@@ -3523,7 +3532,32 @@ namespace umbriel {
       }
     }
 
-    grab->view->resizeFloating(newRight - newLeft, newBottom - newTop);
+    // The configure goes out now, so the client's latency is unchanged. The scene catches up in flushResizeTarget,
+    // once for however many events this frame carried: the presentation is a layout pipeline, and a 200 Hz pointer
+    // would otherwise run it 200 times a second.
+    const wlr_box target{newLeft, newTop, newRight - newLeft, newBottom - newTop};
+    grab->pending = target;
+    grab->pendingX = m_cursor->x;
+    grab->pendingY = m_cursor->y;
+    grab->pendingValid = true;
+    grab->view->requestFloatingResize(target);
+    grab->view->scheduleFrame();
+  }
+
+  void Cursor::flushResizeTarget() {
+    auto* grab = std::get_if<FloatingResizeGrab>(&m_grab);
+    if (grab == nullptr || !grab->pendingValid) {
+      return;
+    }
+    grab->pendingValid = false;
+    if (grab->view == nullptr || !grab->view->mapped()) {
+      return;
+    }
+    grab->view->applyFloatingResize(grab->pending);
+    // Recorded after applying, like the tiled step, so the trace reads the drawn box the frame will show.
+    resizeTrace::step(
+        "floating", grab->edges, grab->pendingX, grab->pendingY, grab->view->presentedBox(), grab->pending
+    );
   }
 
   void Cursor::revealClickedTile(View* view) {
@@ -3893,6 +3927,10 @@ namespace umbriel {
         || grab->workspace->group() == nullptr
         || grab->workspace->group()->output() == nullptr
         || grab->view == nullptr
+        || !grab->view->tiled()
+        || grab->view->workspace() != grab->workspace
+        || grab->view->scheduledFullscreen()
+        || grab->view->currentFullscreen()
         || grab->session == nullptr) {
       resetMode();
       return;
@@ -3904,7 +3942,27 @@ namespace umbriel {
     const wlr_box usable = grab->workspace->tiledArea();
     grab->session->applyDelta(m_cursor->x - grab->startX, m_cursor->y - grab->startY, usable);
     grab->view->setMaximizedState(false);
+    grab->tracePending = true;
     grab->workspace->markArrange(false);
+  }
+
+  void Cursor::traceTiledResizeStep(const Workspace* workspace) {
+    auto* grab = std::get_if<TiledResizeGrab>(&m_grab);
+    if (grab == nullptr || !grab->tracePending || grab->workspace != workspace || grab->view == nullptr) {
+      return;
+    }
+    grab->tracePending = false;
+    // Recorded after Workspace::arrange() updates presentation so drawn mirrors what the compositor just committed.
+    resizeTrace::step(
+        "tiled", grab->edges, m_cursor->x, m_cursor->y, grab->view->presentedBox(),
+        grab->workspace->presentedTiledBox(grab->view)
+    );
+  }
+
+  void Cursor::clearPendingTiledTrace(const Workspace* workspace) {
+    if (auto* grab = std::get_if<TiledResizeGrab>(&m_grab); grab != nullptr && grab->workspace == workspace) {
+      grab->tracePending = false;
+    }
   }
 
 } // namespace umbriel

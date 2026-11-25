@@ -716,6 +716,9 @@ namespace umbriel {
     // stays under it at the same box and keeps drawing its own shadow, so the copy takes none.
     [[nodiscard]] CloseSnapshotId captureHeldSnapshot();
     void applyPresentedSize();
+    // A commit under a pointer resize replaces the client's buffer, which resets the crop; re-derive it against the
+    // box the grab owns instead of re-running the whole presentation.
+    void reapplyGrabbedCrop();
     // Refresh presentation through whichever owner currently holds the view.
     // Scratchpads are detached from workspaces but still need animated crop
     // and chrome updates.
@@ -788,9 +791,6 @@ namespace umbriel {
     // itself. A move grab does not: it may retarget the size once, and the
     // presented size animates there like any other size change.
     bool sizeGrabTracksPointer() const;
-    // A pointer resize, and the final request it flushes on release until the client answers, shows the client's frame
-    // as drawn: never scaled, cropped 1:1 to a smaller tile, with the opposite edges of a float held in place.
-    bool presentsCommittedSize() const;
     // Cursor owns when a drag starts and ends; View owns the scene invariants
     // for the temporary global presentation and its resting presentation.
     void enterDragPresentation();
@@ -859,7 +859,10 @@ namespace umbriel {
     // Keep floats visually at the last requested size while client geometry lags.
     void syncFloatingSurfaceClip();
     void beginFloatingResize(uint32_t edges);
-    void resizeFloating(int width, int height);
+    // A pointer resize asks the client for the new size on the motion event, so client latency is unchanged, and
+    // applies the box to the scene from the frame path: the layout pipeline is what a drag cannot afford per event.
+    void requestFloatingResize(const wlr_box& box);
+    void applyFloatingResize(const wlr_box& box);
     void finishFloatingResize();
     void sendFloatingSize(int width, int height);
     void commitFloatingSize();
@@ -1052,7 +1055,6 @@ namespace umbriel {
     std::optional<FloatingSizeConfigure> m_floatingSizeConfigure;
     bool m_deferXwaylandConfigure = false;
     bool m_xwaylandResizeConfigurePending = false;
-    bool m_pointerResizeSettling = false;
     // applyPresentedCrop programmed the buffer; the surface clip alone no longer describes it.
     bool m_presentedCropActive = false;
     std::optional<std::string> m_xdgTag;
