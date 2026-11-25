@@ -285,7 +285,8 @@ namespace umbriel {
 
   void View::applyPresentedCrop(const wlr_box& content, const wlr_box& surfaceClip) {
     m_presentation.applyCrop(
-        m_contentTree, rootSurface(), geometryBox(), content, surfaceClip, shrinkSampling(sizeGrabTracksPointer())
+        m_contentTree, rootSurface(), geometryBox(), content, surfaceClip,
+        shrinkSampling(sizeGrabTracksPointer() || m_floating.anchor().has_value())
     );
     m_presentedCropActive = true;
     syncXwaylandShape();
@@ -330,6 +331,7 @@ namespace umbriel {
         .width = m_presentedBox.width,
         .height = m_presentedBox.height,
     };
+    setSurfaceTreeClip(&surfaceClip);
     applyPresentedCrop(m_presentedBox, surfaceClip);
   }
 
@@ -403,8 +405,7 @@ namespace umbriel {
       return false;
     }
     const Cursor* cursor = m_server->cursor();
-    return cursor != nullptr
-        && (cursor->isResizingView(this) || (m_tiled && cursor->isResizingWorkspace(m_workspace)));
+    return cursor != nullptr && (cursor->isResizingView(this) || (m_tiled && cursor->isResizingWorkspace(m_workspace)));
   }
 
   void View::enterDragPresentation() {
@@ -1320,8 +1321,10 @@ namespace umbriel {
     // Only a running size animation or interactive resize scales the buffer. At rest, and while a layout motion only
     // moves the window, a tile's buffer is drawn 1:1, centered in the tile when it is smaller.
     const bool layoutResizing = m_layoutMotion && m_workspace != nullptr && m_workspace->layoutSizeAnimating();
-    const bool stretch =
-        m_presentation.animating() || layoutResizing || openingInsetActive() || sizeGrabActive()
+    const bool stretch = m_presentation.animating()
+        || layoutResizing
+        || openingInsetActive()
+        || sizeGrabActive()
         || m_floating.pendingSize();
     const wlr_box& geometry = geometryBox();
     // Stay inside the tile while geometry lags configure (Electron often stays wide).
