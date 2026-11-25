@@ -20,4 +20,8 @@ namespace umbriel {
   // non-sentinel action is advertised.
   bool actionRegistryComplete();
 
+  // True when `action` would move, resize, retab or reframe a window. A scratchpad arranges its members, so one the
+  // pointer is carrying must refuse these instead of letting the layout move it under the grab.
+  bool actionMovesCarriedWindow(Server& server, const Keybind& bind);
+
 } // namespace umbriel

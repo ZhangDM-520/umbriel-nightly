@@ -113,6 +113,16 @@ Closing the last member leaves the empty pad open. Toggle it to dismiss it, or s
 
 Explicit output, workspace, scratchpad, or enabled pinning rules take priority over the captured scratchpad destination. Unrelated windows without a launch token keep their normal placement. Activating an existing application window does not move it into the scratchpad.
 
+### Dropping a window on an open pad
+
+Drag a window over an open modal scratchpad on any output and release it there: the window joins that pad. A non-modal pad leaves background drags alone. A floating window that is already a member of a scratchpad still showing on screen moves its own pad instead, which takes the window with it; a tiled member stays in that pad, placed by its layout like any other drop there. A floating pad keeps the point you dropped it at; a pad with a layout places the window by layout order. Restoring it later returns it to the workspace the drag started from.
+
+Two drags are declined and stay on their workspace: a lifted tab group, and a pinned window. A declined drop never animates above the pad.
+
+While you are dragging a scratchpad window it belongs to the drag, not to the pad, so the window actions do not apply: `window-move-to-scratchpad`, `window-restore-from-scratchpad`, `window-toggle-scratchpad`, `window-toggle-pinned`, the layout and size actions, and a move to a workspace report an error and change nothing until you release. Opening or closing the pad itself still works, and the drop decides what happens: a window released over the visible pad joins it, and a member released while its pad is hidden leaves that pad and lands where you dropped it, joining the pad that is showing there. Closing a pad under a drag does not take its member off screen, and opening one does not pull the dragged window out of the pointer's hands.
+
+Moving a window into a scratchpad with `window-move-to-scratchpad` uses the pad's output. A pad that is still showing keeps that output even when it is empty, so the window joins it there instead of following the pointer; a hidden pad appears on the pointer's output the next time it is shown.
+
 ### Window rules
 
 Use a `default_scratchpad` window rule:
@@ -236,7 +246,7 @@ Fullscreen, pinned, and maximize-to-edges state are cleared when a window enters
 
 Workspace move bindings remove the focused window from its scratchpad and send it to the selected workspace, restoring its saved tiled or floating state. The window fades in there over [`animation.scratchpad`](animation.md#animation); a silent move to a workspace that is not active fills it in at full opacity, since it is not on screen. Use `window-move-to-workspace <workspace> [--output <output>]` to follow the window, or `window-move-to-workspace-silent <workspace> [--output <output>]` to keep the current workspace active. The next and previous variants work too, using the active workspace on the scratchpad's output as their starting point. Other members stay in the scratchpad. Moving its last member out hides the scratchpad.
 
-Dragging a scratchpad window does not restore it. Dragging one member to another output moves the whole scratchpad there while preserving the other members' relative positions.
+Dragging a scratchpad window while its pad stays open does not restore it. Dragging one member to another output moves the whole scratchpad there while preserving the other members' relative positions. Hiding the pad mid-drag lets the release drop the carried window onto the workspace or open modal pad under the pointer.
 
 If its output disconnects, the scratchpad temporarily moves to another enabled output and returns when the original output becomes available, unless the user has deliberately moved it elsewhere.
 

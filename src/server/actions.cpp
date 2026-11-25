@@ -40,6 +40,135 @@ namespace umbriel {
     template <wlr_direction D> bool actionColumnMoveToOutput(Server& server, const Keybind& bind, std::string* error);
     void finishWorkspaceTransfer(Server& server, View& focused);
 
+    // The window the pointer is carrying, or null. A press that has not crossed the drag threshold is not carried.
+    View* carriedView(Server& server) {
+      const Cursor* cursor = server.cursor();
+      View* view = cursor != nullptr ? cursor->grabbedView() : nullptr;
+      return view != nullptr && cursor->isDraggingView(view) ? view : nullptr;
+    }
+
+    // Whether the pointer is carrying `view`. A carried window belongs to the drag: it is outside every pad and out of
+    // reach of the layout until the button is released.
+    bool carried(Server& server, const View* view) { return view != nullptr && carriedView(server) == view; }
+
+    // Refuses an action that would move a carried window, with the reason the caller sees over IPC.
+    bool refuseCarried(Server& server, const View* view, std::string* error) {
+      if (!carried(server, view)) {
+        return false;
+      }
+      if (error != nullptr) {
+        *error = "the window is being dragged";
+      }
+      return true;
+    }
+
+    // Refuses a scratchpad window action whose target is the window the pointer carries. The carried view comes from
+    // the cursor, not from seat focus: an empty pad clears the keyboard, and the action would otherwise miss the drag.
+    bool refuseCarriedTarget(
+        Server& server, const ScratchpadManager& scratchpad, std::string_view name, std::string* error
+    ) {
+      View* dragged = carriedView(server);
+      if (dragged == nullptr) {
+        return false;
+      }
+      // A visible pad names the member the action would move; when it names another window, this action is not the
+      // drag's business.
+      View* focused = scratchpad.focused(name);
+      if (focused != nullptr && focused != dragged) {
+        return false;
+      }
+      return refuseCarried(server, dragged, error);
+    }
+
+    // Actions that change a window's place, size, tabs or fullscreen state. On a scratchpad the layout owns them, so a
+    // carried member must refuse them the way it refuses a workspace move.
+    bool movesWindow(KeybindAction action) {
+      switch (action) {
+      case KeybindAction::ColumnMoveLeft:
+      case KeybindAction::ColumnMoveRight:
+      case KeybindAction::ColumnMoveToWorkspace:
+      case KeybindAction::ColumnMoveToWorkspaceNext:
+      case KeybindAction::ColumnMoveToWorkspacePrevious:
+      case KeybindAction::ColumnMoveToFirst:
+      case KeybindAction::ColumnMoveToLast:
+      case KeybindAction::ColumnMoveTabNext:
+      case KeybindAction::ColumnMoveTabPrevious:
+      case KeybindAction::ColumnToggleTabbed:
+      case KeybindAction::ColumnSetDisplay:
+      case KeybindAction::WindowMoveOrOutputLeft:
+      case KeybindAction::WindowMoveOrOutputRight:
+      case KeybindAction::WindowMoveUp:
+      case KeybindAction::WindowMoveDown:
+      case KeybindAction::WindowMoveLeft:
+      case KeybindAction::WindowMoveRight:
+      case KeybindAction::WindowMoveOrWorkspaceUp:
+      case KeybindAction::WindowMoveOrWorkspaceDown:
+      case KeybindAction::WindowMoveOrOutputUp:
+      case KeybindAction::WindowMoveOrOutputDown:
+      case KeybindAction::WindowConsumeLeft:
+      case KeybindAction::WindowConsumeOrExpelLeft:
+      case KeybindAction::WindowConsumeRight:
+      case KeybindAction::WindowConsumeOrExpelRight:
+      case KeybindAction::WindowConsumeFromLeft:
+      case KeybindAction::WindowConsumeFromRight:
+      case KeybindAction::WindowCyclePrimaryExtent:
+      case KeybindAction::WindowCyclePrimaryExtentBack:
+      case KeybindAction::WindowSetPrimaryExtent:
+      case KeybindAction::WindowModifyPrimaryExtent:
+      case KeybindAction::WindowSetSecondaryExtent:
+      case KeybindAction::WindowModifySecondaryExtent:
+      case KeybindAction::WindowModifyWidthLeft:
+      case KeybindAction::WindowModifyWidthRight:
+      case KeybindAction::WindowModifyHeightUp:
+      case KeybindAction::WindowModifyHeightDown:
+      case KeybindAction::WindowCycleSecondaryExtent:
+      case KeybindAction::WindowCycleSecondaryExtentBack:
+      case KeybindAction::ToggleMaximize:
+      case KeybindAction::ToggleMaximizeToEdges:
+      case KeybindAction::ToggleFullscreen:
+      case KeybindAction::ToggleFloating:
+      case KeybindAction::TogglePinned:
+      case KeybindAction::WindowMoveToWorkspace:
+      case KeybindAction::WindowMoveToWorkspaceSilent:
+      case KeybindAction::WindowMoveToWorkspaceSilentNext:
+      case KeybindAction::WindowMoveToWorkspaceSilentPrevious:
+      case KeybindAction::WindowMoveToWorkspaceNext:
+      case KeybindAction::WindowMoveToWorkspacePrevious:
+      case KeybindAction::WindowMoveToOutputLeft:
+      case KeybindAction::WindowMoveToOutputRight:
+      case KeybindAction::WindowMoveToOutputUp:
+      case KeybindAction::WindowMoveToOutputDown:
+      case KeybindAction::WindowMoveToOutputNext:
+      case KeybindAction::WindowMoveToOutputPrevious:
+      case KeybindAction::ColumnMoveToOutputLeft:
+      case KeybindAction::ColumnMoveToOutputRight:
+      case KeybindAction::ColumnMoveToOutputUp:
+      case KeybindAction::ColumnMoveToOutputDown:
+      case KeybindAction::WindowSwapNext:
+      case KeybindAction::WindowSwapPrevious:
+      case KeybindAction::WindowSwapLeft:
+      case KeybindAction::WindowSwapRight:
+      case KeybindAction::WindowSwapUp:
+      case KeybindAction::WindowSwapDown:
+      case KeybindAction::WindowCenter:
+      case KeybindAction::ColumnCenter:
+      case KeybindAction::WindowMoveTo:
+      case KeybindAction::WindowMoveBy:
+      case KeybindAction::LayoutMasterCountIncrease:
+      case KeybindAction::LayoutMasterCountDecrease:
+      case KeybindAction::WorkspaceSetLayout:
+      case KeybindAction::WindowMoveToScratchpad:
+      case KeybindAction::WindowRestoreFromScratchpad:
+      case KeybindAction::WindowToggleScratchpad:
+      case KeybindAction::WindowSetRegion:
+      case KeybindAction::WindowClearRegion:
+      case KeybindAction::LayoutToggleSplit:
+        return true;
+      default:
+        return false;
+      }
+    }
+
     std::optional<std::string_view> scratchpadName(Server& server, const Keybind& bind, std::string* error) {
       const auto* arg = payloadIf<ScratchpadArg>(bind);
       ScratchpadManager* manager = server.scratchpadManager();
@@ -202,6 +331,9 @@ namespace umbriel {
     // land proportionally via their remembered usable-area fraction. With `follow` clear the window lands on `target`
     // while the seat stays on the source workspace and the cursor stays where it was.
     void moveViewToWorkspace(Server& server, View& view, Workspace& target, bool follow = true) {
+      if (carried(server, &view)) {
+        return;
+      }
       Workspace* source = view.workspace();
       const bool workspaceChanged = source != &target;
       ScratchpadManager* scratchpad = server.scratchpadManager();
@@ -1161,7 +1293,7 @@ namespace umbriel {
     }
 
     template <int Direction>
-    bool actionMoveVerticalOrWorkspace(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+    bool actionMoveVerticalOrWorkspace(Server& server, const Keybind& /*bind*/, std::string* error) {
       const FocusedMove move = beginFocusedMove(server);
       Workspace* source = windowActionWorkspace(server);
       if (source != nullptr && source->moveFocusedVertical(Direction)) {
@@ -1176,6 +1308,9 @@ namespace umbriel {
           return true;
         }
         if (View* view = placementTarget(server, {}, FocusSource::Layout).value_or(nullptr)) {
+          if (refuseCarried(server, view, error)) {
+            return false;
+          }
           moveViewToWorkspace(server, *view, *target);
         }
       }
@@ -1591,6 +1726,9 @@ namespace umbriel {
           view = placementTarget(server, {}, FocusSource::Recent).value_or(nullptr);
         }
         if (view != nullptr) {
+          if (refuseCarried(server, view, error)) {
+            return false;
+          }
           moveViewToWorkspace(server, *view, **target, follow);
           return true;
         }
@@ -1600,6 +1738,9 @@ namespace umbriel {
         }
       }
       if (bind.action == KeybindAction::ColumnMoveToWorkspace) {
+        if (refuseCarried(server, placementTarget(server, {}, FocusSource::Layout).value_or(nullptr), error)) {
+          return false;
+        }
         moveFocusedColumnToWorkspace(server, **target);
         return true;
       }
@@ -1627,7 +1768,7 @@ namespace umbriel {
     }
 
     template <int Direction, bool Follow>
-    bool actionWindowMoveToWorkspaceAdjacent(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+    bool actionWindowMoveToWorkspaceAdjacent(Server& server, const Keybind& /*bind*/, std::string* error) {
       View* scratchpadView = placementTarget(server, {}, FocusSource::Scratchpad).value_or(nullptr);
       Output* scratchpadOutput =
           scratchpadView != nullptr ? server.scratchpadManager()->outputFor(scratchpadView) : nullptr;
@@ -1643,6 +1784,9 @@ namespace umbriel {
       }
       View* view = scratchpadView != nullptr ? scratchpadView
                                              : placementTarget(server, {}, FocusSource::Layout).value_or(nullptr);
+      if (refuseCarried(server, view, error)) {
+        return false;
+      }
       if (view != nullptr) {
         moveViewToWorkspace(server, *view, *target, Follow);
       }
@@ -1650,7 +1794,7 @@ namespace umbriel {
     }
 
     template <int Direction>
-    bool actionColumnMoveToWorkspaceAdjacent(Server& server, const Keybind& /*bind*/, std::string* /*error*/) {
+    bool actionColumnMoveToWorkspaceAdjacent(Server& server, const Keybind& /*bind*/, std::string* error) {
       Workspace* source = windowActionWorkspace(server);
       Workspace* origin = source != nullptr ? inventoryWorkspace(*source) : nullptr;
       if (origin == nullptr || origin->group() == nullptr) {
@@ -1659,6 +1803,9 @@ namespace umbriel {
       Workspace* target = stepWorkspace(*origin->group(), origin->index(), Direction);
       if (target == nullptr || target == origin) {
         return true;
+      }
+      if (refuseCarried(server, placementTarget(server, {}, FocusSource::Layout).value_or(nullptr), error)) {
+        return false;
       }
       moveFocusedColumnToWorkspace(server, *target);
       return true;
@@ -1743,6 +1890,9 @@ namespace umbriel {
       if (view == nullptr) {
         return true; // nothing focused: silent no-op
       }
+      if (refuseCarried(server, view, error)) {
+        return false;
+      }
       moveViewToWorkspace(server, *view, *destination);
       return true;
     }
@@ -1787,6 +1937,9 @@ namespace umbriel {
       Workspace* destination = targetGroup != nullptr ? targetGroup->active() : nullptr;
       if (destination == nullptr) {
         return reject(error, "output has no workspace");
+      }
+      if (refuseCarried(server, placementTarget(server, {}, FocusSource::Layout).value_or(nullptr), error)) {
+        return false;
       }
       moveFocusedColumnToWorkspace(server, *destination); // nothing focused: silent no-op
       return true;
@@ -2051,9 +2204,15 @@ namespace umbriel {
       if (!name || output == nullptr) {
         return false;
       }
-      View* view = placementTarget(server, {}, FocusSource::Workspace).value_or(nullptr);
       ScratchpadManager* scratchpad = server.scratchpadManager();
-      return scratchpad != nullptr && (view == nullptr || scratchpad->moveToScratchpad(view, *name, output));
+      if (scratchpad == nullptr || refuseCarriedTarget(server, *scratchpad, *name, error)) {
+        return false;
+      }
+      View* view = placementTarget(server, {}, FocusSource::Workspace).value_or(nullptr);
+      if (refuseCarried(server, view, error)) {
+        return false;
+      }
+      return view == nullptr || scratchpad->moveToScratchpad(view, *name, output);
     }
 
     bool actionScratchpadToggle(Server& server, const Keybind& bind, std::string* error) {
@@ -2093,7 +2252,13 @@ namespace umbriel {
         return false;
       }
       ScratchpadManager* scratchpad = server.scratchpadManager();
-      return scratchpad != nullptr && scratchpad->restoreFocused(*name);
+      if (scratchpad == nullptr) {
+        return false;
+      }
+      if (refuseCarriedTarget(server, *scratchpad, *name, error)) {
+        return false;
+      }
+      return scratchpad->restoreFocused(*name);
     }
 
     // Restores the focused window if it is the scratchpad's focused entry, otherwise moves it into the scratchpad.
@@ -2107,10 +2272,16 @@ namespace umbriel {
       if (scratchpad == nullptr) {
         return false;
       }
+      if (refuseCarriedTarget(server, *scratchpad, *name, error)) {
+        return false;
+      }
       if (focusedScratchpadWindow(server) != nullptr && scratchpad->hasFocus(*name)) {
         return scratchpad->restoreFocused(*name);
       }
       View* view = placementTarget(server, {}, FocusSource::Workspace).value_or(nullptr);
+      if (refuseCarried(server, view, error)) {
+        return false;
+      }
       return view == nullptr || scratchpad->moveToScratchpad(view, *name, output);
     }
 
@@ -2414,6 +2585,25 @@ namespace umbriel {
     static_assert(everyActionHasHandler());
 
   } // namespace
+
+  bool actionMovesCarriedWindow(Server& server, const Keybind& bind) {
+    View* dragged = carriedView(server);
+    if (dragged == nullptr || !movesWindow(bind.action)) {
+      return false;
+    }
+    ScratchpadManager* scratchpad = server.scratchpadManager();
+    if (scratchpad == nullptr || !scratchpad->contains(dragged)) {
+      return false;
+    }
+    if (const std::string_view id = windowIdArg(bind); !id.empty()) {
+      const auto target = placementTarget(server, id);
+      return target.has_value() && target.value() == dragged;
+    }
+    if (View* focused = focusedWindow(server); focused != nullptr && focused->placementRoot() != dragged) {
+      return false;
+    }
+    return true;
+  }
 
   ActionHandlerFn actionHandlerFor(KeybindAction action) {
     const auto index = static_cast<size_t>(action);
