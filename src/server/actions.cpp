@@ -209,7 +209,7 @@ namespace umbriel {
       Output* sourceOutput = fromScratchpad                 ? scratchpad->outputFor(&view)
           : source != nullptr && source->group() != nullptr ? source->group()->output()
                                                             : nullptr;
-      if (fromScratchpad && !scratchpad->restoreToWorkspace(&view, &target)) {
+      if (fromScratchpad && !scratchpad->restoreToWorkspace(&view, &target, follow)) {
         return;
       }
       const bool floating = view.floating();
@@ -265,6 +265,9 @@ namespace umbriel {
         view.restoreFloatingPosition();
       }
       server.focusView(&view, FocusReason::Directional);
+      if (fromScratchpad) {
+        scratchpad->finishRestoreTransition(&view);
+      }
       if (workspaceChanged) {
         finishWorkspaceTransfer(server, view);
       }
