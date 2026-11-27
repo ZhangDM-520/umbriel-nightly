@@ -14,18 +14,20 @@ Each row is a closed, unmerged upstream pull request. The decline quote is what 
 | [noctalia-dev/umbriel#559](https://github.com/noctalia-dev/umbriel/pull/559) | `perf(view): skip settled views in the animation tick's effect sync`        | 2026-10-25 | "the interactive scenario shows no difference. In exchange, every path outside the tick that stops a view animation now has to call `syncAnimationEffects()` itself" | 1       |
 | [noctalia-dev/umbriel#560](https://github.com/noctalia-dev/umbriel/pull/560) | `perf(scene): skip unchanged geometry work in the surface reconfigure`      | 2026-10-25 | "by your own numbers the end-to-end gain is inside the noise floor. In exchange, `surface_apply_geometry` now has to stay a pure function of the snapshotted inputs" | 1       |
 
-Seven commits in total, merged with `--no-ff` so each thread keeps its own tip. The branch base at the time of writing is `upstream/main c89f6771`.
+Seven commits in total, merged with `--no-ff` so each thread keeps its own tip. The branch base at the time of writing is `upstream/main 48839a34`, merged in rather than rebased.
 
 ## What each member touches
 
 Shared surfaces matter more than totals: a future member that edits one of these files will conflict with the member named here, and the resolution belongs to whichever side understands the invariant.
 
-| Area                     | Files                                                                                                                                                          | Member |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
-| Animation effect sync    | `src/view/view_animation.cpp`, `src/view/view.h`, `src/scene/effect_registry.{h,cpp}`, `src/view/view_chrome.cpp`, `src/view/view_state.cpp`                   | #559   |
-| Scene surface geometry   | `umbrielfx/types/scene/surface.c`, `umbrielfx/include/umbrielfx/types/wlr_scene.h`, `umbrielfx/tests/abi.c`                                                    | #560   |
-| Scrolling strip resting  | `src/layout/scrolling.{h,cpp}`, `src/layout/layout.h`, `src/config/{config.h,fields_layout.cpp,resolve.cpp}`, `docs/user/layout.md`, `docs/user/workspaces.md` | #713   |
-| Layout harness and units | `tests/unit/scrolling_layout.cpp`, `tests/unit/config_load.cpp`, `tests/harness/checks/layout/`                                                                | #713   |
+| Area                     | Files                                                                                                                                                                    | Member |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ |
+| Animation effect sync    | `src/view/view_animation.cpp`, `src/view/view.h`, `src/scene/effect_registry.{h,cpp}`, `src/view/view_chrome.cpp`, `src/view/view_state.cpp`                             | #559   |
+| Scene surface geometry   | `umbrielfx/types/scene/surface.c`, `umbrielfx/include/umbrielfx/types/wlr_scene.h`, `umbrielfx/tests/abi.c`                                                              | #560   |
+| Scrolling strip resting  | `src/layout/scrolling.{h,cpp}`, `src/layout/layout.h`, `src/config/{config.h,fields_layout.cpp,resolve.cpp}`, `docs/user/layout-scrolling.md`, `docs/user/workspaces.md` | #713   |
+| Layout harness and units | `tests/unit/scrolling_layout.cpp`, `tests/unit/config_load.cpp`, `tests/harness/checks/layout/`                                                                          | #713   |
+
+Upstream split `docs/user/layout.md` into one page per layout, so `#713`'s scrolling text lives in `docs/user/layout-scrolling.md` while `layout.md` stays an overview. A doc conflict on layout resolves into the per-layout page, never back into the overview.
 
 `#560` is the only member that changes `umbrielfx`. Its addition to `wlr_scene.h` is an in-tree struct extension, so the ABI guard in `umbrielfx/tests/abi.c` must be updated in the same commit as the struct, and no node may be allocated outside `umbrielfx` afterwards.
 

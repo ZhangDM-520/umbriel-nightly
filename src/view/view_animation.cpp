@@ -22,7 +22,6 @@ extern "C" {
 #include <utility>
 #include "wlr.h"
 // clang-format on
-#include "workspace/scratchpad.h"
 #include "workspace/workspace.h"
 #include "xwayland/xwayland.h"
 
@@ -142,9 +141,6 @@ namespace umbriel {
   }
 
   void View::releaseOpeningPresentation(bool completed, bool pointerTakeover) {
-    if (!completed) {
-      m_openingFloatingSize.reset();
-    }
     if (!pointerTakeover) {
       dropOpeningInset();
     }
@@ -169,6 +165,19 @@ namespace umbriel {
 
   bool View::fullscreenOpeningActive() const {
     return m_mapped && !m_inScratchpad && layoutFullscreen() && m_fade.animating() && m_fade.target() > m_fade.from();
+  }
+
+  bool View::floatingOpeningActive() const { return openingAnimationActive() && !m_tiled && !layoutFullscreen(); }
+
+  wlr_box View::floatingOpeningBox() const {
+    // The position the window rests at, or is animating through; its scene node carries the inset instead.
+    const wlr_box& geometry = geometryBox();
+    return {
+        .x = static_cast<int>(std::lround(m_posX.current())),
+        .y = static_cast<int>(std::lround(m_posY.current())),
+        .width = geometry.width,
+        .height = geometry.height,
+    };
   }
 
   wlr_box View::openingInsetBox(const wlr_box& box) const {
@@ -225,6 +234,9 @@ namespace umbriel {
     if (m_tiled && m_workspace != nullptr && m_workspace->layout().columnOf(this) >= 0) {
       const wlr_box slot = m_workspace->presentedTiledBox(this);
       setScenePosition(slot.x, slot.y);
+    } else if (!m_tiled) {
+      const wlr_box rest = floatingOpeningBox();
+      setScenePosition(rest.x, rest.y);
     }
   }
 
@@ -253,10 +265,7 @@ namespace umbriel {
     if (layoutPresentationOwned()) {
       return m_presentation.width();
     }
-    if (currentFullscreen()
-        || m_tiled
-        || m_floating.pendingSize()
-        || (openingAnimationActive() && m_openingFloatingSize)) {
+    if (currentFullscreen() || m_tiled || m_floating.pendingSize()) {
       return target.width;
     }
     return std::min(committedContentBox().width, target.width);
@@ -275,10 +284,7 @@ namespace umbriel {
     if (layoutPresentationOwned()) {
       return m_presentation.height();
     }
-    if (currentFullscreen()
-        || m_tiled
-        || m_floating.pendingSize()
-        || (openingAnimationActive() && m_openingFloatingSize)) {
+    if (currentFullscreen() || m_tiled || m_floating.pendingSize()) {
       return target.height;
     }
     return std::min(committedContentBox().height, target.height);
@@ -287,9 +293,12 @@ namespace umbriel {
   // Fullscreen chrome follows committed state. Transitions may scale the old buffer, while settled mismatched buffers
   // remain centered and cropped without distortion.
 
-  void View::updateFullscreenPresentation(int width, int height) {
+  void View::updateFullscreenPresentation(int width, int height, bool centerDrawn) {
+    // Only xdg content: an X11 window's surface offset would disagree with the position its X clients are told.
+    const wlr_box drawn = centerDrawn && m_toplevel != nullptr ? committedContentBox() : wlr_box{};
     m_presentation.updateFullscreen(
-        currentFullscreen(), width, height, toplevelSurfaceTreeNode(m_contentTree, rootSurface()), geometryBox()
+        currentFullscreen(), width, height, toplevelSurfaceTreeNode(m_contentTree, rootSurface()), geometryBox(),
+        drawn.width, drawn.height
     );
   }
 
@@ -337,11 +346,6 @@ namespace umbriel {
     }
     if (m_workspace != nullptr) {
       m_workspace->syncViewPresentation(this);
-      return;
-    }
-    if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
-        scratchpad != nullptr && scratchpad->contains(this)) {
-      scratchpad->syncViewPresentation(this);
     }
   }
 
@@ -359,7 +363,7 @@ namespace umbriel {
   }
 
   void View::finishSizeAnimation() {
-    if ((!currentFullscreen() && m_tiled) || m_floating.pendingSize() || m_openingFloatingSize) {
+    if ((!currentFullscreen() && m_tiled) || m_floating.pendingSize()) {
       resetPresentedSurface();
       applyPresentedSize();
       return;
@@ -399,17 +403,10 @@ namespace umbriel {
 
   bool View::sizeGrabTracksPointer() const {
     const Cursor* cursor = m_server->cursor();
-    return cursor != nullptr
-        && (cursor->isResizingView(this) || cursor->isResizingWorkspace(m_workspace))
-        && !tiledResizeWaitsForClient();
+    return cursor != nullptr && (cursor->isResizingView(this) || cursor->isResizingWorkspace(m_workspace));
   }
 
   bool View::presentsCommittedSize() const { return sizeGrabTracksPointer() || m_pointerResizeSettling; }
-
-  bool View::tiledResizeWaitsForClient() const {
-    const auto& animation = config().animation;
-    return m_tiled && animation.windowsResize.waitsForClient(animation.enabled);
-  }
 
   void View::enterDragPresentation() {
     cancelPositionAnimation();
@@ -420,7 +417,10 @@ namespace umbriel {
       m_ssdFrame->setBlurLive(true);
     }
     setFadeAlpha(m_fadeAlpha);
-    if (m_pinned) {
+    if (m_inScratchpad) {
+      // A scratchpad lifted over fullscreen sits above the drag tree's usual place; keep the member above its backdrop.
+      wlr_scene_node_place_above(&m_server->dragTree()->node, &m_server->scratchpadTree()->node);
+    } else if (m_pinned) {
       wlr_scene_node_place_above(&m_server->dragTree()->node, &m_server->pinnedTree()->node);
     } else if (m_workspace != nullptr && m_workspace->floatingLayerRaised()) {
       wlr_scene_node_place_above(&m_server->dragTree()->node, &m_server->fullscreenTree()->node);
@@ -539,11 +539,6 @@ namespace umbriel {
     }
     setFadeAlpha(m_fadeAlpha);
     wlr_scene_node_place_below(&m_server->dragTree()->node, &m_server->dragIconTree()->node);
-    if (ScratchpadManager* scratchpad = m_server->scratchpadManager();
-        scratchpad != nullptr && scratchpad->contains(this)) {
-      scratchpad->restorePresentation(this);
-      return;
-    }
     if (m_pinned) {
       restorePinnedSceneParent();
       if (m_workspace != nullptr) {
@@ -567,11 +562,9 @@ namespace umbriel {
   void View::beginResizeAnimation(int width, int height, bool allowFullscreen) {
     const Overview* overview = m_server->overview();
     const bool presentedInOverview = overview != nullptr && overview->active() && m_workspace != nullptr;
-    const ScratchpadManager* scratchpad = m_server->scratchpadManager();
-    const bool presentedInScratchpad = scratchpad != nullptr && scratchpad->contains(this);
     if (!m_mapped
         || (!m_onActiveWorkspace && !presentedInOverview)
-        || (m_workspace == nullptr && !presentedInScratchpad && !allowFullscreen)
+        || (m_workspace == nullptr && !allowFullscreen)
         || (!allowFullscreen && (scheduledFullscreen() || currentFullscreen()))
         || width <= 0
         || height <= 0) {
@@ -637,7 +630,7 @@ namespace umbriel {
   }
 
   void View::presentBox(const wlr_box& box) {
-    if ((tiledOpeningActive() || fullscreenOpeningActive()) && m_presentation.animating()) {
+    if ((tiledOpeningActive() || fullscreenOpeningActive() || floatingOpeningActive()) && m_presentation.animating()) {
       // windows_in owns lifecycle composition. A resize tween started by the admitting arrange would otherwise win
       // shader selection and apply a second windows_move over the workspace-owned logical presentation.
       m_presentation.setRegion(m_presentation.width(), m_presentation.height());
@@ -884,10 +877,10 @@ namespace umbriel {
       parameters.expand = dragPhysicsExpand();
       if (fx_uniform* sheet =
               fx_parameters_add_uniform(&parameters, "umbriel_deformation", FX_UNIFORM_VEC2, DragPhysics::kPoints)) {
-        const DragPhysics::Sheet displacement = m_dragPhysics.normalizedDisplacement();
+        const DragPhysics::Sheet coefficients = m_dragPhysics.normalizedPolynomial();
         for (int i = 0; i < DragPhysics::kPoints; ++i) {
-          sheet->floats[i * 2] = displacement[i][0];
-          sheet->floats[i * 2 + 1] = displacement[i][1];
+          sheet->floats[i * 2] = coefficients[i][0];
+          sheet->floats[i * 2 + 1] = coefficients[i][1];
         }
       }
       wlr_scene_node_set_animation(&target->node, FX_SLOT_DRAG, effectRegistry().deformationShader(), &parameters);
@@ -913,7 +906,7 @@ namespace umbriel {
       }
       const BorderEffectGate ownGate{
           .focused = m_borderFocusedState,
-          .allowUnfocused = config().effects.borderUnfocused,
+          .allowUnfocused = borderUnfocused(),
           .decorated = decorated(),
           .urgent = m_urgent,
           .fullscreen = scheduledFullscreen(),
@@ -951,10 +944,7 @@ namespace umbriel {
     // Disable sibling size animations during a tiled resize, so they do not
     // trail the pointer while clients acknowledge successive configures.
     const Cursor* cursor = m_server->cursor();
-    if (cursor != nullptr
-        && cursor->isResizingWorkspace(m_workspace)
-        && !tiledResizeWaitsForClient()
-        && sizeAnimating()) {
+    if (cursor != nullptr && cursor->isResizingWorkspace(m_workspace) && sizeAnimating()) {
       cancelSizeAnimation();
     }
 
@@ -1019,12 +1009,26 @@ namespace umbriel {
           && m_workspace->layout().columnOf(this) >= 0
           && m_fade.target() > m_fade.from();
       // A fullscreen opener is presented inside the output box its layout assigned, which the arrange that follows
-      // its map owns. Styles without an inset leave the node where that arrange put it.
+      // its map owns, and a floating one inside its position at the size its client draws now. Styles without an inset
+      // leave the node where it rests.
       const bool insetFullscreenOpen =
           openingInsetPending() && m_mapped && !m_inScratchpad && layoutFullscreen() && m_fade.target() > m_fade.from();
+      const bool insetFloatingOpen = openingInsetPending()
+          && m_mapped
+          && !m_inScratchpad
+          && !m_tiled
+          && !layoutFullscreen()
+          && m_fade.target() > m_fade.from();
       if (insetFullscreenOpen) {
         if (fullscreenOpeningActive()) {
           presentBox(fullscreenLayoutBox());
+        } else {
+          dropOpeningInset();
+          finishSizeAnimation();
+        }
+      } else if (insetFloatingOpen) {
+        if (floatingOpeningActive()) {
+          presentBox(floatingOpeningBox());
         } else {
           dropOpeningInset();
           finishSizeAnimation();
@@ -1351,7 +1355,12 @@ namespace umbriel {
   }
 
   void View::applyPresentation(const wlr_box& target) {
-    updateFullscreenPresentation(target.width, target.height);
+    const bool committedSize = presentsCommittedSize();
+    // Only a running size animation scales the buffer. At rest, and while a layout motion only moves the window, a
+    // tile's buffer is drawn 1:1, centered in the tile when it is smaller.
+    const bool layoutResizing = m_layoutMotion && m_workspace != nullptr && m_workspace->layoutSizeAnimating();
+    const bool stretch =
+        !committedSize && (m_presentation.animating() || layoutResizing || openingInsetActive() || sizeGrabActive());
     const wlr_box& geometry = geometryBox();
     // Stay inside the tile while geometry lags configure (Electron often stays wide).
     const wlr_box content{
@@ -1360,6 +1369,13 @@ namespace umbriel {
         .width = presentedWidth(target),
         .height = presentedHeight(target),
     };
+    // Fullscreen centers in the output tile; a tile centers in the box it is presented at, which a held or moving
+    // window keeps at its starting size.
+    if (currentFullscreen()) {
+      updateFullscreenPresentation(target.width, target.height);
+    } else {
+      updateFullscreenPresentation(content.width, content.height, m_tiled && !stretch && !committedSize);
+    }
     if (currentFullscreen()) {
       // The backdrop is the window's own letterbox, so it follows the presented box rather than the tile: a window
       // scaling into or out of fullscreen carries its surround instead of sitting in an output-wide one. The output's
@@ -1377,18 +1393,13 @@ namespace umbriel {
         .width = content.width,
         .height = content.height,
     };
-    const bool committedSize = presentsCommittedSize();
-    if (committedSize && m_presentedCropActive) {
+    if (!stretch && m_presentedCropActive) {
       // The clip below crops 1:1, but an unchanged clip box would keep the scaled crop programmed before.
       resetPresentedSurface();
     }
     setSurfaceTreeClip(&surfaceClip);
     applyCornerRadius();
-    if (!committedSize
-        && (layoutPresentationOwned()
-            || sizeGrabActive()
-            || m_floating.pendingSize()
-            || (openingAnimationActive() && m_openingFloatingSize))) {
+    if (stretch) {
       // The clip crops 1:1 in surface coordinates and caps the destination at the committed surface size, so it cannot
       // express an animated or interactive presented size. Program the buffer directly; the clip above keeps the buffer
       // node positioned at the visible box origin.
