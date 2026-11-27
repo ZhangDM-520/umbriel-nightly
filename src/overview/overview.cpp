@@ -348,6 +348,9 @@ namespace umbriel {
       if (card.shadowTree != nullptr && card.shadowTree->node.enabled && card.shadowTree->node.parent != card.tree) {
         wlr_scene_node_set_position(&card.shadowTree->node, card.box.x, card.box.y);
       }
+      if (view->hasActiveAnimations()) {
+        syncCardEffects(card);
+      }
       layoutCardBadge(card, metrics, contentW, contentH, scaledRadius);
       return;
     }
