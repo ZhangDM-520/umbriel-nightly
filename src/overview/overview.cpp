@@ -369,7 +369,7 @@ namespace umbriel {
       if (card.shadowTree != nullptr && card.shadowTree->node.enabled && card.shadowTree->node.parent != card.tree) {
         wlr_scene_node_set_position(&card.shadowTree->node, card.box.x, card.box.y);
       }
-      if (view->hasActiveAnimations()) {
+      if (card.effectsAnimating || view->hasActiveAnimations()) {
         syncCardEffects(card);
       }
       layoutCardBadge(card, metrics, contentW, contentH, scaledRadius);
@@ -725,7 +725,13 @@ namespace umbriel {
       const float dimAlpha = state.pad.faded ? state.pad.dim * backdropLevel : 0.0F;
       const std::array<float, 4> dimColor{0.0F, 0.0F, 0.0F, dimAlpha};
       // The live pad's dim is an unrounded rect.
-      layoutWorkspaceBackground(state.pad.dimRect, padPreview, 0, dimColor);
+      wlr_scene_rect* rect = state.pad.dimRect;
+      wlr_scene_node_set_enabled(&rect->node, dimAlpha > 0.001F);
+      if (dimAlpha > 0.001F) {
+        wlr_scene_node_set_position(&rect->node, padPreview.x, padPreview.y);
+        wlr_scene_rect_set_size(rect, padPreview.width, padPreview.height);
+        wlr_scene_rect_set_color(rect, dimColor.data());
+      }
     }
     for (size_t index = 0; index < state.workspaceBackgrounds.size(); ++index) {
       WorkspaceBackground& background = state.workspaceBackgrounds[index];
@@ -853,6 +859,7 @@ namespace umbriel {
 
   void Overview::syncCardEffects(Card& card) {
     View* view = card.view;
+    card.effectsAnimating = view->hasActiveAnimations();
     Workspace* workspace = view->workspace();
     const BorderEffectGate cardGate{
         .focused = card.transient ? card.focused
@@ -2267,7 +2274,7 @@ namespace umbriel {
     if (m_active && !laidOut) {
       for (const auto& state : m_outputs) {
         for (const auto& card : state->cards) {
-          if (card->view != nullptr && card->view->hasActiveAnimations()) {
+          if (card->view != nullptr && (card->effectsAnimating || card->view->hasActiveAnimations())) {
             syncCardEffects(*card);
           }
         }

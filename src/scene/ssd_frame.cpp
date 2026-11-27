@@ -525,9 +525,7 @@ namespace umbriel {
     return results;
   }
 
-  TitleBarColorSource SsdFrame::colorSource() const {
-    return m_colorSourceOverride.value_or(m_style.colorSource);
-  }
+  TitleBarColorSource SsdFrame::colorSource() const { return m_colorSourceOverride.value_or(m_style.colorSource); }
 
   std::optional<std::array<float, 4>> SsdFrame::barFillColor() const {
     const auto& colors = m_titleBarColors;

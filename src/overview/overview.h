@@ -279,6 +279,7 @@ namespace umbriel {
       // the ring it was showing instead of deriving focus from one.
       bool focused = false;
       std::optional<CardLayoutKey> cachedLayout;
+      bool effectsAnimating = false;
     };
 
     struct ShortcutAssignment {

@@ -24,7 +24,7 @@ The `windows_resize` timeline does not enter pointer resizes. A pointer resize a
 
 ## Tiled resizes
 
-A tiled grab applies the pointer delta to the layout through `ResizeGrab::applyDelta` and schedules an arrange on the next output frame, so the drawn box stretches through `View::applyPresentedCrop` toward `Workspace::presentedTiledBox` and restores 1:1 sampling on release in `Cursor::resetMode`. Setting `[animation.windows_resize] wait_for_redraw = true` (`View::tiledResizeWaitsForClient`) opts tiled drags into unstretched held switches capped by `kRedrawWaitMs` instead.
+A tiled grab applies the pointer delta to the layout through `ResizeGrab::applyDelta` and schedules an arrange on the next output frame, so the drawn box stretches through `View::applyPresentedCrop` toward `Workspace::presentedTiledBox` and restores 1:1 sampling on release in `Cursor::resetMode`.
 
 ## Measuring it
 
