@@ -228,6 +228,19 @@ namespace umbriel {
       std::array<float, 4> badgeBackground{};
       std::string shortcut;
       size_t shortcutMatched = 0;
+      // Cached state for skipping redundant per-card geometry/border/surface re-application on pure scroll/pan.
+      bool layoutCached = false;
+      wlr_box cachedGeometry{};
+      wlr_box cachedWorld{};
+      double cachedZoom = -1.0;
+      float cachedOpacity = -1.0F;
+      float cachedChromeAlpha = -1.0F;
+      bool cachedLiveTarget = false;
+      bool cachedFocused = false;
+      bool cachedDragging = false;
+      bool cachedFullscreen = false;
+      bool cachedMaximized = false;
+      bool cachedUrgent = false;
     };
 
     struct ShortcutAssignment {
@@ -254,6 +267,14 @@ namespace umbriel {
       wlr_scene_buffer* buffer = nullptr;
       wl_listener outputSample{};
       wl_listener frameDone{};
+      wlr_box lastSourceBox{};
+      int lastLocalX = 0;
+      int lastLocalY = 0;
+      int lastDestW = -1;
+      int lastDestH = -1;
+      int lastRadius = -1;
+      bool lastVisible = false;
+      bool opaqueDirty = true;
     };
 
     // Resolved stack entry, ordered bottom to top.
@@ -268,6 +289,13 @@ namespace umbriel {
       wlr_scene_tree* tree = nullptr;
       wlr_scene_rect* fill = nullptr;
       std::vector<std::unique_ptr<DesktopMirror>> mirrors;
+      int clipWidth = -1;
+      int clipHeight = -1;
+      int fillWidth = -1;
+      int fillHeight = -1;
+      int fillRadius = -1;
+      std::array<float, 4> fillColor{-1.0F, -1.0F, -1.0F, -1.0F};
+      bool fillEnabled = true;
     };
 
     struct OutputState {
@@ -382,7 +410,7 @@ namespace umbriel {
     bool handleShortcutKey(uint32_t keysym);
     void refreshShortcutMatches();
     void clearShortcutInput();
-    void updateShortcutAssignments();
+    bool updateShortcutAssignments();
 
     // `releaseVelocity` is the speed a gesture left behind, in overview progress per second, and is zero for every
     // other caller: it starts the zoom spring from the speed the fingers had instead of from rest.
