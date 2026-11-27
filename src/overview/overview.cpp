@@ -244,42 +244,67 @@ namespace umbriel {
     };
   }
 
+  void Overview::hideCard(Card& card) {
+    card.cachedLayout.reset();
+    if (card.shadowTree != nullptr) {
+      wlr_scene_node_set_enabled(&card.shadowTree->node, false);
+    }
+    card.blur.hide();
+    wlr_scene_node_set_enabled(&card.tree->node, false);
+    syncCardEffects(card);
+  }
+
+  void Overview::layoutCardBadge(
+      Card& card, const PreviewMetrics& metrics, int contentW, int contentH, int scaledRadius
+  ) const {
+    if (card.badge == nullptr) {
+      return;
+    }
+    // Overshooting curves can push m_progress past [0, 1] and wlr_scene_buffer_set_opacity asserts.
+    const auto badgeAlpha = static_cast<float>(std::clamp(m_progress, 0.0, 1.0));
+    const bool matched = card.shortcutMatched != SIZE_MAX;
+    const bool fits = contentW >= card.badgeWidth + 2 * kBadgeMargin && contentH >= card.badgeHeight + 2 * kBadgeMargin;
+    const bool badgeOn =
+        !card.shortcut.empty() && matched && fits && !m_closing && &card != m_dragCard && badgeAlpha > 0.01F;
+    wlr_scene_node_set_enabled(&card.badge->node, badgeOn);
+    if (!badgeOn) {
+      return;
+    }
+    // The badge hugs the card's top-left corner, the only corner the output clip or the top/overlay exclusive
+    // zones can hide. On each axis it slides just far enough to clear the start of the usable area, never past
+    // the card's opposite inset, where a card scrolled out of view keeps it. `fits` keeps the card-local bounds
+    // ordered.
+    const auto inset = [](int origin, int extent, int badgeExtent, int clipStart) {
+      return std::clamp(
+          std::max(clipStart, origin) + kBadgeMargin - origin, kBadgeMargin, extent - badgeExtent - kBadgeMargin
+      );
+    };
+    wlr_scene_node_set_position(
+        &card.badge->node, inset(card.box.x, contentW, card.badgeWidth, metrics.usableBox.x),
+        inset(card.box.y, contentH, card.badgeHeight, metrics.usableBox.y)
+    );
+    wlr_scene_buffer_set_opacity(card.badgeText, badgeAlpha);
+    const std::array<float, 4> background = tint(card.badgeBackground, badgeAlpha);
+    wlr_scene_rect_set_color(card.badgeRect, background.data());
+    // The badge renders unscaled, so it takes the zoomed radius the cards
+    // around it use instead of the full-size one.
+    wlr_scene_rect_set_corner_radius(
+        card.badgeRect, std::min(scaledRadius, std::min(card.badgeWidth, card.badgeHeight) / 2)
+    );
+  }
+
   void Overview::layoutCard(Card& card, const PreviewMetrics& metrics, double workspaceScroll, const View* liveTarget) {
     View* view = card.view;
     const wlr_box& geometry = view->geometryBox();
-    if (geometry.width <= 0 || geometry.height <= 0) {
-      card.layoutCached = false;
-      if (card.shadowTree != nullptr) {
-        wlr_scene_node_set_enabled(&card.shadowTree->node, false);
-      }
-      card.blur.hide();
-      wlr_scene_node_set_enabled(&card.tree->node, false);
-      syncCardEffects(card);
-      return;
-    }
-    // A tiled opener waiting for the arrange that places it is not showing yet, and a hidden tab shares its box with
-    // the tab on show. Their cards follow.
-    if (view->presentationSuppressed()) {
-      card.layoutCached = false;
-      if (card.shadowTree != nullptr) {
-        wlr_scene_node_set_enabled(&card.shadowTree->node, false);
-      }
-      card.blur.hide();
-      wlr_scene_node_set_enabled(&card.tree->node, false);
-      syncCardEffects(card);
+    if (geometry.width <= 0 || geometry.height <= 0 || view->presentationSuppressed()) {
+      hideCard(card);
       return;
     }
 
     const double z = metrics.zoom;
     const wlr_box& world = view->presentedBox();
     if (world.width <= 0 || world.height <= 0) {
-      card.layoutCached = false;
-      if (card.shadowTree != nullptr) {
-        wlr_scene_node_set_enabled(&card.shadowTree->node, false);
-      }
-      card.blur.hide();
-      wlr_scene_node_set_enabled(&card.tree->node, false);
-      syncCardEffects(card);
+      hideCard(card);
       return;
     }
     const int contentW = std::max(1, static_cast<int>(std::lround(world.width * z)));
@@ -303,57 +328,27 @@ namespace umbriel {
     const float presentedOpacity = view->presentedOpacity() * cardOpacity;
     const float chromeAlpha = desktopChromeAlpha();
     const Workspace* workspace = view->workspace();
-    const bool isFocused = workspace != nullptr && workspace->focusedView() == view;
-    const bool isLiveTarget = view == liveTarget;
-    const bool isDragging = &card == m_dragCard;
-    const bool isFullscreen = view->currentFullscreen();
-    const bool isMaximized = view->maximizedToEdges();
-    const bool isUrgent = view->urgent();
+    const CardLayoutKey layoutKey{
+        .geometry = geometry,
+        .worldWidth = world.width,
+        .worldHeight = world.height,
+        .zoom = z,
+        .opacity = presentedOpacity,
+        .chromeAlpha = chromeAlpha,
+        .liveTarget = view == liveTarget,
+        .focused = workspace != nullptr && workspace->focusedView() == view,
+        .dragging = &card == m_dragCard,
+        .fullscreen = view->currentFullscreen(),
+        .maximized = view->maximizedToEdges(),
+        .urgent = view->urgent(),
+    };
+    const int scaledRadius = static_cast<int>(std::lround(view->decorationCornerRadius() * z));
 
-    const bool staticUnchanged = card.layoutCached
-        && card.cachedZoom == z
-        && card.cachedGeometry.x == geometry.x
-        && card.cachedGeometry.y == geometry.y
-        && card.cachedGeometry.width == geometry.width
-        && card.cachedGeometry.height == geometry.height
-        && card.cachedWorld.width == world.width
-        && card.cachedWorld.height == world.height
-        && card.cachedOpacity == presentedOpacity
-        && card.cachedChromeAlpha == chromeAlpha
-        && card.cachedLiveTarget == isLiveTarget
-        && card.cachedFocused == isFocused
-        && card.cachedDragging == isDragging
-        && card.cachedFullscreen == isFullscreen
-        && card.cachedMaximized == isMaximized
-        && card.cachedUrgent == isUrgent;
-
-    if (staticUnchanged) {
+    if (card.cachedLayout.has_value() && *card.cachedLayout == layoutKey) {
       if (card.shadowTree != nullptr && card.shadowTree->node.enabled && card.shadowTree->node.parent != card.tree) {
         wlr_scene_node_set_position(&card.shadowTree->node, card.box.x, card.box.y);
       }
-      if (card.badge != nullptr) {
-        const auto badgeAlpha = static_cast<float>(std::clamp(m_progress, 0.0, 1.0));
-        const bool matched = card.shortcutMatched != SIZE_MAX;
-        const bool fits =
-            contentW >= card.badgeWidth + 2 * kBadgeMargin && contentH >= card.badgeHeight + 2 * kBadgeMargin;
-        const bool badgeOn =
-            !card.shortcut.empty() && matched && fits && !m_closing && !isDragging && badgeAlpha > 0.01F;
-        wlr_scene_node_set_enabled(&card.badge->node, badgeOn);
-        if (badgeOn) {
-          const auto inset = [](int origin, int extent, int badgeExtent, int clipStart) {
-            return std::clamp(
-                std::max(clipStart, origin) + kBadgeMargin - origin, kBadgeMargin, extent - badgeExtent - kBadgeMargin
-            );
-          };
-          wlr_scene_node_set_position(
-              &card.badge->node, inset(card.box.x, contentW, card.badgeWidth, metrics.usableBox.x),
-              inset(card.box.y, contentH, card.badgeHeight, metrics.usableBox.y)
-          );
-          wlr_scene_buffer_set_opacity(card.badgeText, badgeAlpha);
-          const std::array<float, 4> background = tint(card.badgeBackground, badgeAlpha);
-          wlr_scene_rect_set_color(card.badgeRect, background.data());
-        }
-      }
+      layoutCardBadge(card, metrics, contentW, contentH, scaledRadius);
       return;
     }
 
@@ -367,7 +362,6 @@ namespace umbriel {
     const int outerBorderWidth = view->decorationOuterBorderWidth();
     const int total = borderWidth + outerBorderWidth;
     const bool decorated = total > 0 && !view->currentFullscreen() && !view->maximizedToEdges();
-    const int scaledRadius = static_cast<int>(std::lround(view->decorationCornerRadius() * z));
     const int outerRadius = decorated ? scaledRadius : 0;
     const auto scaledWidth = [z](int width) {
       return width > 0 ? std::max(1, static_cast<int>(std::lround(width * z))) : 0;
@@ -397,40 +391,7 @@ namespace umbriel {
     }
     layoutCardChrome(card, world, decorated ? total : 0, z, presentedOpacity);
     syncCardEffects(card);
-
-    if (card.badge != nullptr) {
-      // Overshooting curves can push m_progress past [0, 1] and wlr_scene_buffer_set_opacity asserts.
-      const auto badgeAlpha = static_cast<float>(std::clamp(m_progress, 0.0, 1.0));
-      const bool matched = card.shortcutMatched != SIZE_MAX;
-      const bool fits =
-          contentW >= card.badgeWidth + 2 * kBadgeMargin && contentH >= card.badgeHeight + 2 * kBadgeMargin;
-      const bool badgeOn =
-          !card.shortcut.empty() && matched && fits && !m_closing && &card != m_dragCard && badgeAlpha > 0.01F;
-      wlr_scene_node_set_enabled(&card.badge->node, badgeOn);
-      if (badgeOn) {
-        // The badge hugs the card's top-left corner, the only corner the output clip or the top/overlay exclusive
-        // zones can hide. On each axis it slides just far enough to clear the start of the usable area, never past
-        // the card's opposite inset, where a card scrolled out of view keeps it. `fits` keeps the card-local bounds
-        // ordered.
-        const auto inset = [](int origin, int extent, int badgeExtent, int clipStart) {
-          return std::clamp(
-              std::max(clipStart, origin) + kBadgeMargin - origin, kBadgeMargin, extent - badgeExtent - kBadgeMargin
-          );
-        };
-        wlr_scene_node_set_position(
-            &card.badge->node, inset(card.box.x, contentW, card.badgeWidth, metrics.usableBox.x),
-            inset(card.box.y, contentH, card.badgeHeight, metrics.usableBox.y)
-        );
-        wlr_scene_buffer_set_opacity(card.badgeText, badgeAlpha);
-        const std::array<float, 4> background = tint(card.badgeBackground, badgeAlpha);
-        wlr_scene_rect_set_color(card.badgeRect, background.data());
-        // The badge renders unscaled, so it takes the zoomed radius the cards
-        // around it use instead of the full-size one.
-        wlr_scene_rect_set_corner_radius(
-            card.badgeRect, std::min(scaledRadius, std::min(card.badgeWidth, card.badgeHeight) / 2)
-        );
-      }
-    }
+    layoutCardBadge(card, metrics, contentW, contentH, scaledRadius);
 
     // Every surface of the card rounds against the card's content box, the same rule the live window uses, so a
     // client that draws its corners from a subsurface keeps them rounded in the thumbnail.
@@ -516,18 +477,7 @@ namespace umbriel {
     if (!blurUpdated) {
       card.blur.hide();
     }
-    card.layoutCached = true;
-    card.cachedGeometry = geometry;
-    card.cachedWorld = world;
-    card.cachedZoom = z;
-    card.cachedOpacity = presentedOpacity;
-    card.cachedChromeAlpha = chromeAlpha;
-    card.cachedLiveTarget = isLiveTarget;
-    card.cachedFocused = isFocused;
-    card.cachedDragging = isDragging;
-    card.cachedFullscreen = isFullscreen;
-    card.cachedMaximized = isMaximized;
-    card.cachedUrgent = isUrgent;
+    card.cachedLayout = layoutKey;
   }
 
   void Overview::layoutCardChrome(Card& card, const wlr_box& world, int borderInset, double zoom, float alpha) const {
@@ -1248,7 +1198,7 @@ namespace umbriel {
   }
 
   void Overview::syncCardSurfaces(Card* card) {
-    card->layoutCached = false;
+    card->cachedLayout.reset();
     for (const auto& entry : card->surfaces) {
       entry->inTree = false;
     }
@@ -2052,6 +2002,9 @@ namespace umbriel {
       for (const auto& state : m_outputs) {
         state->rowScroll.snap(state->rowScroll.target());
       }
+      if (!m_closing) {
+        applyProgress();
+      }
       finishAnimation();
       return;
     }
@@ -2150,7 +2103,6 @@ namespace umbriel {
 
   void Overview::finishAnimation() {
     if (!m_closing) {
-      applyProgress();
       return;
     }
     View* focus = m_pendingFocus;
@@ -2630,6 +2582,9 @@ namespace umbriel {
   void Overview::onViewPresentationChanged(View* view) {
     if (!m_active || view == nullptr || stateForWorkspace(view->workspace()) == nullptr) {
       return;
+    }
+    if (Card* card = findCard(view)) {
+      card->cachedLayout.reset();
     }
     m_cardPresentationDirty = true;
   }

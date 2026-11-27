@@ -180,6 +180,39 @@ namespace umbriel {
     struct Card;
     struct OutputState;
 
+    struct CardLayoutKey {
+      wlr_box geometry{};
+      int worldWidth = 0;
+      int worldHeight = 0;
+      double zoom = -1.0;
+      float opacity = -1.0F;
+      float chromeAlpha = -1.0F;
+      bool liveTarget = false;
+      bool focused = false;
+      bool dragging = false;
+      bool fullscreen = false;
+      bool maximized = false;
+      bool urgent = false;
+
+      bool operator==(const CardLayoutKey& other) const {
+        return geometry.x == other.geometry.x
+            && geometry.y == other.geometry.y
+            && geometry.width == other.geometry.width
+            && geometry.height == other.geometry.height
+            && worldWidth == other.worldWidth
+            && worldHeight == other.worldHeight
+            && zoom == other.zoom
+            && opacity == other.opacity
+            && chromeAlpha == other.chromeAlpha
+            && liveTarget == other.liveTarget
+            && focused == other.focused
+            && dragging == other.dragging
+            && fullscreen == other.fullscreen
+            && maximized == other.maximized
+            && urgent == other.urgent;
+      }
+    };
+
     struct CardSurface {
       Card* card = nullptr;
       // The window whose surface tree holds `surface`: the card's own, or a dialog attached to it.
@@ -228,19 +261,7 @@ namespace umbriel {
       std::array<float, 4> badgeBackground{};
       std::string shortcut;
       size_t shortcutMatched = 0;
-      // Cached state for skipping redundant per-card geometry/border/surface re-application on pure scroll/pan.
-      bool layoutCached = false;
-      wlr_box cachedGeometry{};
-      wlr_box cachedWorld{};
-      double cachedZoom = -1.0;
-      float cachedOpacity = -1.0F;
-      float cachedChromeAlpha = -1.0F;
-      bool cachedLiveTarget = false;
-      bool cachedFocused = false;
-      bool cachedDragging = false;
-      bool cachedFullscreen = false;
-      bool cachedMaximized = false;
-      bool cachedUrgent = false;
+      std::optional<CardLayoutKey> cachedLayout;
     };
 
     struct ShortcutAssignment {
@@ -396,6 +417,8 @@ namespace umbriel {
     void applyPinnedOpacity(float alpha) const;
     void layoutOutput(OutputState& state);
     void layoutCard(Card& card, const PreviewMetrics& metrics, double workspaceScroll, const View* liveTarget);
+    void hideCard(Card& card);
+    void layoutCardBadge(Card& card, const PreviewMetrics& metrics, int contentW, int contentH, int scaledRadius) const;
     // Refreshes a card's animation and persistent effect slots from its view.
     void syncCardEffects(Card& card);
     void syncCardEffects();
