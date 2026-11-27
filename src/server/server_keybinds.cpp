@@ -154,6 +154,12 @@ namespace umbriel {
       }
       return false;
     }
+    if (actionMovesCarriedWindow(*this, bind)) {
+      if (error != nullptr) {
+        *error = "the window is being dragged";
+      }
+      return false;
+    }
     const ActionHandlerFn handler = actionHandlerFor(bind.action);
     if (handler == nullptr) {
       if (error != nullptr) {

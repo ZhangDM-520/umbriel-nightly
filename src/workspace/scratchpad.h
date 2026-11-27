@@ -52,7 +52,9 @@ namespace umbriel {
     std::vector<Workspace*> workspaces() const;
     // Re-resolve each scratchpad workspace's layout from [layout] and its [[scratchpad]] `layout` keys.
     void refreshLayouts();
-    struct AutomaticAdmission {
+    // Where an admitted window returns to once it leaves the pad. A drop passes the workspace the drag started on; a
+    // rule or launch admission passes the placement it would have had.
+    struct AdmissionOptions {
       Output* restoreOutput = nullptr;
       Workspace* restoreWorkspace = nullptr;
       Output* focusOrigin = nullptr;
@@ -60,11 +62,23 @@ namespace umbriel {
       bool updateRestoreLocation = false;
     };
     Output* presentationOutput(std::string_view name, Output* fallback) const;
+    // Which pad is on screen on `output`, empty when none is.
+    [[nodiscard]] std::string_view visibleNameOn(const Output* output) const;
     Output* restoreOutputFor(const View* view) const;
     [[nodiscard]] bool moveToScratchpad(View* view, std::string_view name, Output* invokingOutput);
+    // Place a window the pointer dropped at (`dropX`, `dropY`) on `output` into the pad showing there, remembering
+    // `sourceWorkspace` as where a restore returns it. False when no pad is visible on that output, or the pad refuses
+    // the window.
+    [[nodiscard]] bool dropInto(View* view, Output* output, Workspace* sourceWorkspace, int dropX, int dropY);
+    // Take a member the pointer released back out of its pad, onto the active workspace of `output`. The release calls
+    // this only for a hidden pad, so the window does not vanish with the pad.
+    void dropOut(View* view, Output* output);
+    // Whether `view` is a member of a pad that is not showing. A visible pad follows a released member to the output
+    // it was dropped on, so only a hidden pad lets the window go.
+    [[nodiscard]] bool memberOfHiddenPad(const View* view) const;
     [[nodiscard]] bool
-    assignAutomatic(View* view, std::string_view name, Output* placementOutput, const AutomaticAdmission& options);
-    [[nodiscard]] bool assignFromParent(View* view, const View* parent, const AutomaticAdmission& options);
+    assignAutomatic(View* view, std::string_view name, Output* placementOutput, const AdmissionOptions& options);
+    [[nodiscard]] bool assignFromParent(View* view, const View* parent, const AdmissionOptions& options);
     // Launch context survives an empty pad. Explicit workspace focus relinquishes it on that output.
     std::string_view activeOn(const Output* output) const;
     void deactivateOn(const Output* output);
@@ -118,6 +132,9 @@ namespace umbriel {
     View* focusedOn(const Output* output) const;
     void noteFocus(View* view);
     void finishMove(View* view, Output* output);
+    // Apply the pad's current presentation to one member, for a window a drag kept out of reach of the pad's own
+    // show and hide.
+    void refreshPresentation(View& view);
     void remove(View* view);
     void moveOutput(Output* from, Output* to);
     void releaseOutput(Output* output);
@@ -209,13 +226,15 @@ namespace umbriel {
     // nearest window of the scratchpad it was opened from, and any other window clears it and leaves cycle() to resume
     // at the member after it.
     void forgetLastFocused(Scratchpad& scratchpad, std::string_view name, const View* view) const;
-    enum class Admission { Interactive, Automatic };
+    // `Drop` is the pointer releasing a window: the one admission that applies to the view the grab is carrying.
+    enum class Admission { Interactive, Automatic, Drop };
+    // Whether the pointer is carrying `view`, which keeps it out of every pad until the button is released.
+    bool isCarried(const View* view) const;
     // Whether a window leaving the pad dissolves in on its workspace, or lands fully visible because nothing of it is
     // on screen.
     enum class RestoreTransition { Snap, Animated, Deferred };
     bool admit(
-        View* view, std::string_view name, Output* invokingOutput, Admission admission,
-        const AutomaticAdmission& options
+        View* view, std::string_view name, Output* invokingOutput, Admission admission, const AdmissionOptions& options
     );
     // Create, move, or drop the scratchpad's workspace so it follows the pad's output.
     void syncWorkspace(std::string_view name, Scratchpad& scratchpad);
@@ -228,7 +247,10 @@ namespace umbriel {
         View* view, const wlr_box& previousArea, const wlr_box& targetArea, bool proportionalSize,
         bool reposition = true
     );
-    bool restoreView(View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition);
+    bool restoreView(
+        View* view, Output* fallback, bool focus, Workspace* target, RestoreTransition transition,
+        bool allowCarried = false
+    );
     // The modal pad with the greatest fade on `output`: it owns the output's dim and blur, whose shader binds to its
     // fade. Null when no modal pad is there.
     const Scratchpad* backdropOwner(const Output* output) const;

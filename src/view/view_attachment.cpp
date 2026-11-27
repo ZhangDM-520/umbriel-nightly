@@ -225,7 +225,7 @@ namespace umbriel {
         scratchpad == nullptr
         || !scratchpad->assignFromParent(
             this, root,
-            ScratchpadManager::AutomaticAdmission{
+            ScratchpadManager::AdmissionOptions{
                 .restoreOutput = root->currentOutput(),
                 .focusOrigin = scratchpad->outputFor(root),
                 .restoreTiled = false,

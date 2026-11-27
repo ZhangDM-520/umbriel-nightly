@@ -200,6 +200,8 @@ namespace umbriel {
     void traceTiledResizeStep(const Workspace* workspace);
     // Clears any pending tiled trace step when a workspace arrange returns early without presenting.
     void clearPendingTiledTrace(const Workspace* workspace);
+    // Whether a tiled resize grab still owns a window the layout can resize.
+    [[nodiscard]] bool tiledResizeTargetValid(const TiledResizeGrab& grab) const;
 
     void attachInputDevice(wlr_input_device* device);
     void applyConfig();
