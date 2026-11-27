@@ -15,6 +15,7 @@ blur = true
 | Key                 | Default | Description                                                                               |
 | ------------------- | ------- | ----------------------------------------------------------------------------------------- |
 | `opacity`           | `1.0`   | Surface opacity, 0.0 to 1.0.                                                              |
+| `drag_opacity`      | global  | Override `appearance.drag_opacity`, 0.0 to 1.0.                                           |
 | `blur`              | off     | Blur behind the window, including a translucent Umbriel title bar.                        |
 | `blur_popups`       | off     | Also blur the window's popups. Popups always blur the live content behind them.           |
 | `blur_ignore_alpha` | `0.0`   | Skip blur where the content is more transparent than this, 0.0 to 1.0.                    |
@@ -23,31 +24,43 @@ blur = true
 
 ### Borders, corners, and shadow
 
-| Key                      | Default | Description                                                                                                                         |
-| ------------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `border_width`           | global  | Override `appearance.border_width`, 0 to 100.                                                                                       |
-| `outer_border_width`     | global  | Override `appearance.outer_border_width`, 0 to 100.                                                                                 |
-| `border_color_focused`   | global  | Override `colors.border.focused`.                                                                                                   |
-| `border_color_unfocused` | global  | Override `colors.border.unfocused`.                                                                                                 |
-| `border_color_outer`     | global  | Override `colors.border.outer`.                                                                                                     |
-| `corner_radius`          | global  | Override `appearance.corner_radius`, 0 to 100.                                                                                      |
-| `shadow`                 | global  | Override `appearance.shadow.enabled`.                                                                                               |
-| `title_bar`              | global  | `"on"`, `"negotiated"`, `"forced"`, or `"off"`; overrides `appearance.title_bar.mode`.                                              |
-| `title_bar_buttons`      | global  | Override `appearance.title_bar.buttons`: any of `"minimize"`, `"maximize"`, `"close"` from the title outward, or `[]` for none.     |
-| `title_bar_color_source` | global  | `"fixed"`, `"window"`, or `"average"`; overrides `appearance.title_bar.color_source`. See [Title bars](title-bars.md#color-source). |
-| `title_bar_background`           | global  | Override `colors.title_bar.background`.                                                                                         |
-| `title_bar_background_unfocused` | global  | Override `colors.title_bar.background_unfocused`.                                                                               |
-| `title_bar_text`                 | global  | Override `colors.title_bar.text`.                                                                                               |
-| `title_bar_text_unfocused`       | global  | Override `colors.title_bar.text_unfocused`.                                                                                     |
-| `title_bar_close`                | global  | Override `colors.title_bar.close`.                                                                                              |
-| `title_bar_close_glyph`          | global  | Override `colors.title_bar.close_glyph`.                                                                                        |
-| `title_bar_close_glyph_hover`    | global  | Override `colors.title_bar.close_glyph_hover`.                                                                                  |
-| `title_bar_maximize`             | global  | Override `colors.title_bar.maximize`.                                                                                           |
-| `title_bar_maximize_glyph`       | global  | Override `colors.title_bar.maximize_glyph`.                                                                                     |
-| `title_bar_maximize_glyph_hover` | global  | Override `colors.title_bar.maximize_glyph_hover`.                                                                               |
-| `title_bar_minimize`             | global  | Override `colors.title_bar.minimize`.                                                                                           |
-| `title_bar_minimize_glyph`       | global  | Override `colors.title_bar.minimize_glyph`.                                                                                     |
-| `title_bar_minimize_glyph_hover` | global  | Override `colors.title_bar.minimize_glyph_hover`.                                                                               |
+| Key                              | Default | Description                                                                                                                         |
+| -------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `border_width`                   | global  | Override `appearance.border_width`, 0 to 100.                                                                                       |
+| `outer_border_width`             | global  | Override `appearance.outer_border_width`, 0 to 100.                                                                                 |
+| `border_color_focused`           | global  | Override `colors.border.focused`.                                                                                                   |
+| `border_color_unfocused`         | global  | Override `colors.border.unfocused`.                                                                                                 |
+| `border_color_outer`             | global  | Override `colors.border.outer`.                                                                                                     |
+| `corner_radius`                  | global  | Override `appearance.corner_radius`, 0 to 100.                                                                                      |
+| `shadow`                         | global  | Override `appearance.shadow.enabled`.                                                                                               |
+| `title_bar`                      | global  | `"on"`, `"negotiated"`, `"forced"`, or `"off"`; overrides `appearance.title_bar.mode`.                                              |
+| `title_bar_buttons`              | global  | Override `appearance.title_bar.buttons`: any of `"minimize"`, `"maximize"`, `"close"` from the title outward, or `[]` for none.     |
+| `title_bar_color_source`         | global  | `"fixed"`, `"window"`, or `"average"`; overrides `appearance.title_bar.color_source`. See [Title bars](title-bars.md#color-source). |
+| `title_bar_background`           | global  | Override `colors.title_bar.background`.                                                                                             |
+| `title_bar_background_unfocused` | global  | Override `colors.title_bar.background_unfocused`.                                                                                   |
+| `title_bar_text`                 | global  | Override `colors.title_bar.text`.                                                                                                   |
+| `title_bar_text_unfocused`       | global  | Override `colors.title_bar.text_unfocused`.                                                                                         |
+| `title_bar_close`                | global  | Override `colors.title_bar.close`.                                                                                                  |
+| `title_bar_close_glyph`          | global  | Override `colors.title_bar.close_glyph`.                                                                                            |
+| `title_bar_close_glyph_hover`    | global  | Override `colors.title_bar.close_glyph_hover`.                                                                                      |
+| `title_bar_maximize`             | global  | Override `colors.title_bar.maximize`.                                                                                               |
+| `title_bar_maximize_glyph`       | global  | Override `colors.title_bar.maximize_glyph`.                                                                                         |
+| `title_bar_maximize_glyph_hover` | global  | Override `colors.title_bar.maximize_glyph_hover`.                                                                                   |
+| `title_bar_minimize`             | global  | Override `colors.title_bar.minimize`.                                                                                               |
+| `title_bar_minimize_glyph`       | global  | Override `colors.title_bar.minimize_glyph`.                                                                                         |
+| `title_bar_minimize_glyph_hover` | global  | Override `colors.title_bar.minimize_glyph_hover`.                                                                                   |
+| `title_bar_height`               | global  | Override `appearance.title_bar.height`, 16 to 128.                                                                                  |
+| `title_bar_font`                 | global  | Override `appearance.title_bar.font`.                                                                                               |
+| `title_bar_title_align`          | global  | Override `appearance.title_bar.title_align` (`"left"`, `"center"`, `"right"`).                                                      |
+| `title_bar_button_position`      | global  | Override `appearance.title_bar.button_position` (`"left"`, `"right"`).                                                              |
+| `title_bar_button_corner_radius` | global  | Override `appearance.title_bar.button_corner_radius`, -1 to 100.                                                                    |
+| `title_bar_button_size`          | global  | Override `appearance.title_bar.button_size`, -1 to 128.                                                                             |
+| `title_bar_button_gap`           | global  | Override `appearance.title_bar.button_gap`, 0 to 100.                                                                               |
+| `title_bar_button_padding`       | global  | Override `appearance.title_bar.button_padding`, -1 to 100.                                                                          |
+| `title_bar_button_glyph`         | global  | Override `appearance.title_bar.button_glyph` (`"always"`, `"hover"`, `"never"`).                                                    |
+| `title_bar_button_glyph_size`    | global  | Override `appearance.title_bar.button_glyph_size`, -1 to 128.                                                                       |
+| `title_bar_button_glyph_stroke`  | global  | Override `appearance.title_bar.button_glyph_stroke`, -1.0 to 16.0.                                                                  |
+| `title_bar_button_background`    | global  | Override `appearance.title_bar.button_background`.                                                                                  |
 
 ### Effects
 
@@ -149,17 +162,6 @@ title_bar = "off"
 - Forcing a bar does not remove the application's own headerbar.
 
 The modes and the bar's look are described in [Title bars](title-bars.md).
-
-### Color source
-
-```toml
-# Take the bar's color from the window's own edge, for these only
-[[window_rule]]
-match.app_id = "^my-wine-app$"
-title_bar_color_source = "window"
-```
-
-`title_bar_color_source` sets [`color_source`](title-bars.md#color-source) for one window, so the bar can take its color from the window's own top edge only where that helps — a program with an ugly header bar, or a Wine application — while terminals and editors keep the palette. It works in both directions: `"window"` or `"average"` opts a window in over a global `"fixed"`, and `"fixed"` exempts one from a global `"window"`. A later matching rule replaces an earlier override, while a rule that omits the key leaves one in place. `color_source_height`, `title_shadow`, `title_contrast`, and `title_contrast_sample` stay global.
 
 ## Applications with their own decorations
 

@@ -324,7 +324,7 @@ namespace umbriel {
     // and the pad fade is what it does inside this workspace. Content, chrome, border and shadow all take this alpha.
     float cardOpacity = 1.0F;
     if (&card == m_dragCard) {
-      cardOpacity = config().appearance.dragOpacity;
+      cardOpacity = card.view->dragOpacity();
     } else if (card.transient) {
       cardOpacity = card.fadeFrom * static_cast<float>(std::clamp(1.0 - m_progress, 0.0, 1.0));
     }

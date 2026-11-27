@@ -296,7 +296,7 @@ namespace umbriel {
       // from the title's span. A button that paints its own colour never reads that edge, so it adds no span. The
       // button boxes are in the bar's coordinates, like the label.
       const auto& colors = m_titleBarColors;
-      const bool backgrounds = config().appearance.titleBar.buttonBackground;
+      const bool backgrounds = m_style.buttonBackground;
       const auto symbolOnBar = [&](TitleBarButton which) {
         if (!backgrounds) {
           return true;
@@ -353,6 +353,14 @@ namespace umbriel {
       return;
     }
     m_titleBarColors = colors;
+    redraw();
+  }
+
+  void SsdFrame::setStyle(const Config::Appearance::TitleBar& style) {
+    if (m_style == style) {
+      return;
+    }
+    m_style = style;
     redraw();
   }
 
@@ -518,7 +526,7 @@ namespace umbriel {
   }
 
   TitleBarColorSource SsdFrame::colorSource() const {
-    return m_colorSourceOverride.value_or(config().appearance.titleBar.colorSource);
+    return m_colorSourceOverride.value_or(m_style.colorSource);
   }
 
   std::optional<std::array<float, 4>> SsdFrame::barFillColor() const {
@@ -570,7 +578,7 @@ namespace umbriel {
   }
 
   std::array<float, 4> SsdFrame::resolvedTitleColor() const {
-    const auto& style = config().appearance.titleBar;
+    const auto& style = m_style;
     const auto& colors = m_titleBarColors;
     const std::array<float, 4>& configured = m_focused ? colors.text : colors.textUnfocused;
     // Judged against the bar as shown — the fill dimmed over the unfocused palette when the window is inactive — so
@@ -614,7 +622,7 @@ namespace umbriel {
     updateAdaptive(fromCommit);
     // Only the contrast rule turns a resolved color into a repaint; the mirror follows the commit on its own. A symbol
     // on its own button color never sees a sample, but a bare one does, so a sample under any button can move it.
-    const auto& style = config().appearance.titleBar;
+    const auto& style = m_style;
     if (!style.titleContrast) {
       return false;
     }
@@ -630,7 +638,7 @@ namespace umbriel {
 
   void SsdFrame::updateAdaptive(bool fromCommit) {
     // The palette stays painted underneath, so a transparent edge or a missing buffer leaves no hole.
-    const auto& style = config().appearance.titleBar;
+    const auto& style = m_style;
     const TitleBarColorSource source = colorSource();
     const bool average = source == TitleBarColorSource::Average;
     wlr_buffer* buffer = source != TitleBarColorSource::Fixed
@@ -899,7 +907,7 @@ namespace umbriel {
   const TabLabel* SsdFrame::measureTitle(
       const std::array<float, 4>& color, float alpha, TitleBarLayout& parts, int radius, bool shadowed
   ) const {
-    const auto& style = config().appearance.titleBar;
+    const auto& style = m_style;
     TabLabelRequest request{
         .text = m_title,
         .color = color,
@@ -929,7 +937,7 @@ namespace umbriel {
   }
 
   std::span<const TitleBarButton> SsdFrame::visibleButtons() const {
-    const auto& style = config().appearance.titleBar;
+    const auto& style = m_style;
     return style.buttonGlyph != TitleBarButtonGlyph::Never || style.buttonBackground
         ? std::span<const TitleBarButton>(m_buttons)
         : std::span<const TitleBarButton>();
@@ -949,7 +957,7 @@ namespace umbriel {
       }
       return;
     }
-    const auto& style = config().appearance.titleBar;
+    const auto& style = m_style;
     const int size = titleBarButtonDiameter(m_geometry.titleBarHeight, style.buttonSize);
     const TitleBarGlyph glyph = titleBarGlyph(size, style.buttonGlyphSize, style.buttonGlyphStroke);
     const float scale = std::max(1.0F, m_geometry.scale);
@@ -998,7 +1006,7 @@ namespace umbriel {
       return;
     }
     const auto& colors = m_titleBarColors;
-    const auto& style = config().appearance.titleBar;
+    const auto& style = m_style;
     const bool backgrounds = style.buttonBackground;
     float color[4];
     const auto& background = m_focused ? colors.background : colors.backgroundUnfocused;
@@ -1116,7 +1124,7 @@ namespace umbriel {
     // Before the title is measured, not after: the contrast rule reads the color this leaves behind, and a fill that
     // arrives later would make the title one frame stale.
     updateAdaptive(false);
-    const auto& style = config().appearance.titleBar;
+    const auto& style = m_style;
     const int radius = nestedRadius(g.cornerRadius, g.borderInset);
     TitleBarLayout parts =
         titleBarLayout(g.contentWidth, h, style.buttonPosition, visibleButtons(), style.buttonGeometry(), radius);
@@ -1188,7 +1196,7 @@ namespace umbriel {
     if (m_preview || m_geometry.suppressed || (!m_tree->node.enabled && !m_gripTree->node.enabled)) {
       return {};
     }
-    const auto& style = config().appearance.titleBar;
+    const auto& style = m_style;
     return ssdFramePointAt(
         m_geometry.contentWidth, m_geometry.contentHeight, m_geometry.titleBarHeight, m_geometry.borderInset,
         m_resizable, style.buttonPosition, visibleButtons(), style.buttonGeometry(), x, y,
@@ -1301,6 +1309,7 @@ namespace umbriel {
       frame->setColorSource(m_colorSourceOverride);
       frame->setContentSurface(m_content, m_contentGeometry);
       frame->setColors(m_titleBarColors);
+      frame->setStyle(m_style);
       frame->reloadConfig();
     }
   }
