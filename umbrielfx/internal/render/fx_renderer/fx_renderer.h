@@ -30,7 +30,7 @@ bool fx_renderer_sdr_direct_matches_composition(struct wlr_buffer* buffer);
 
 // Whether the saved optimized blur is valid, encoded SDR and matches this
 // output buffer's size and effect format.
-bool fx_renderer_optimized_blur_ready(struct wlr_output* output, struct wlr_buffer* buffer);
+bool fx_renderer_optimized_blur_ready(struct wlr_output* output, struct wlr_buffer* buffer, bool needs_no_blur);
 
 struct fx_pixel_format {
   uint32_t drm_format;
