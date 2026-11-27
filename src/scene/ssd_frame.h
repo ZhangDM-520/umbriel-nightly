@@ -62,6 +62,7 @@ namespace umbriel {
     void setContentSurface(wlr_surface* surface, const wlr_box& geometry);
     // Re-reads the strip after the window committed, with the geometry the commit left behind.
     void syncContent(const wlr_box& geometry);
+    void setColors(const Config::Colors::TitleBar& colors);
     bool maximizeEnabled() const { return m_maximizeEnabled; }
     int titleBarHeight() const { return m_geometry.titleBarHeight; }
     bool contains(const wlr_scene_node* node) const;
@@ -198,6 +199,7 @@ namespace umbriel {
     std::array<int, kTitleBarButtonCount> m_iconSizes{};
     std::array<TitleBarGlyph, kTitleBarButtonCount> m_iconGlyphs{};
     std::vector<TitleBarButton> m_buttons;
+    Config::Colors::TitleBar m_titleBarColors = config().colors.titleBar;
     std::array<wlr_scene_rect*, 4> m_grips{};
     std::shared_ptr<TabLabelCache> m_labels;
     ViewChromeGeometry m_geometry;
