@@ -1753,10 +1753,11 @@ namespace umbriel {
   void Workspace::trackCloseSnapshot(CloseSnapshotId id, const wlr_box& outputBox) {
     const wlr_box canvas{outputBox.x - m_slideOffsetX, outputBox.y - m_slideOffsetY, outputBox.width, outputBox.height};
     m_trackedCloseSnapshots.push_back({.id = id, .canvas = canvas});
-    syncCloseSnapshots();
+    ScratchpadManager* scratchpads = m_scratchpad ? m_group->server()->scratchpadManager() : nullptr;
+    syncCloseSnapshots(scratchpads != nullptr ? scratchpads->fadeFor(this) : 1.0F);
   }
 
-  void Workspace::syncCloseSnapshots() {
+  void Workspace::syncCloseSnapshots(float padFade) {
     if (m_group == nullptr) {
       return;
     }
@@ -1765,17 +1766,33 @@ namespace umbriel {
       return !server->closeSnapshotAlive(snapshot.id);
     });
 
-    const bool visible = m_active || m_inSwitchTransition;
+    bool visible = m_active || m_inSwitchTransition;
+    float fade = 1.0F;
+    if (m_scratchpad) {
+      // A pad workspace stays active; its snapshots follow the owning pad's own visibility fade instead.
+      fade = padFade;
+      visible = fade > 0.001F;
+    }
     for (const TrackedCloseSnapshot& snapshot : m_trackedCloseSnapshots) {
       server->presentCloseSnapshot(
           snapshot.id, snapshot.canvas.x + m_slideOffsetX, snapshot.canvas.y + m_slideOffsetY, visible
       );
+      if (m_scratchpad) {
+        server->setCloseSnapshotFade(snapshot.id, fade);
+      }
     }
   }
 
   void Workspace::discardCloseSnapshots() {
     if (m_group != nullptr) {
       Server* server = m_group->server();
+      if (m_scratchpad) {
+        // The snapshot lives in this pad's tree; move it out before the tree is destroyed so the server can still
+        // reap it without destroying its node twice.
+        for (const TrackedCloseSnapshot& snapshot : m_trackedCloseSnapshots) {
+          server->reparentCloseSnapshot(snapshot.id, server->scratchpadTree());
+        }
+      }
       for (const TrackedCloseSnapshot& snapshot : m_trackedCloseSnapshots) {
         // Keep the server-owned animation object alive until the normal post-tick reap. Destroying it while a
         // WorkspaceGroup animation tick is iterating the server's owner snapshot would invalidate that iteration.
