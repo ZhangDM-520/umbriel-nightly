@@ -1017,6 +1017,8 @@ struct render_data {
   // A persistent effect draws on this output this frame: veto scanout and keep effect buffers.
   bool persistent_visible;
   bool has_optimized_blur_consumer;
+  // Total capture depth of enclosing persistent nodes skipped due to clean damage.
+  unsigned skipped_persistent_depth;
 };
 
 static void logical_to_buffer_coords(pixman_region32_t* region, const struct render_data* data, bool round_up) {
@@ -4292,6 +4294,77 @@ static bool drag_offscreen_capture_box(
   return true;
 }
 
+static bool is_display_output_target(const struct render_data* data) {
+  return !data->shadow_capture
+      && !data->effect_capture
+      && data->backdrop_group == NULL
+      && data->workspace_group == NULL;
+}
+
+static bool blur_node_in_suboutput_capture(
+    struct wlr_scene_node* node, const struct render_data* data, const struct fx_gles_render_pass* pass
+) {
+  if (data->effects == NULL) {
+    return false;
+  }
+  const struct wlr_box full_target = {
+      .width = pass->buffer->buffer->width,
+      .height = pass->buffer->buffer->height,
+  };
+  for (struct wlr_scene_node* cur = node->parent != NULL ? &node->parent->node : NULL; cur != NULL;
+       cur = cur->parent != NULL ? &cur->parent->node : NULL) {
+    struct scene_animation* anc = scene_animation_get(cur);
+    if (anc == NULL) {
+      continue;
+    }
+    if (anc->isolation_group != NULL) {
+      return true;
+    }
+    bool has_capture = false;
+    for (unsigned slot = 0; slot < FX_ANIMATION_SLOTS; slot++) {
+      const struct fx_effect_shader* shader = anc->shaders[slot];
+      if (shader != NULL && shader->renderer == pass->buffer->renderer && !fx_slot_in_place(slot)) {
+        has_capture = true;
+        break;
+      }
+    }
+    if (!has_capture) {
+      continue;
+    }
+    int lx, ly;
+    if (!wlr_scene_node_coords(cur, &lx, &ly)) {
+      return true;
+    }
+    pixman_region32_t bounds;
+    pixman_region32_init(&bounds);
+    scene_node_bounds(cur, lx, ly, &bounds);
+    struct wlr_box cap_box = {0};
+    struct wlr_box group_box = {0};
+    bool aligned = !drag_offscreen_capture_box(anc, data, &bounds, &group_box);
+    if (aligned && !pixman_region32_empty(&bounds)) {
+      const struct wlr_box drawn = region_to_buffer_box(&bounds, animation_expand(anc), data);
+      cap_box = quantize_capture_box(drawn, full_target.width, full_target.height);
+      aligned = wlr_box_equal(&cap_box, &full_target);
+    } else {
+      aligned = false;
+    }
+    pixman_region32_fini(&bounds);
+    if (!aligned) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Records the deepest output animation buffer a display-pass capture needs, counting
+// persistent captures this frame skipped.
+static void
+note_output_animation_depth(struct fx_gles_render_pass* pass, const struct render_data* data, unsigned depth) {
+  if (is_display_output_target(data) && pass->group_depth == 0 && depth > pass->output_animation_used.depth) {
+    pass->output_animation_used.depth = depth;
+  }
+}
+
 static void render_animated_range(
     struct render_list_entry* entries, int high, int low, struct wlr_scene_node* stop, const struct render_data* data
 );
@@ -4373,6 +4446,7 @@ static bool render_animation_shadow(
   if (!fx_render_pass_begin_animation_box(pass, &caster_box)) {
     return false;
   }
+  note_output_animation_depth(pass, data, pass->animation_depth + data->skipped_persistent_depth);
   struct render_data capture = *data;
   capture.shadow_capture = true;
   capture.capture_x -= caster_box.x;
@@ -4451,6 +4525,47 @@ static bool scene_border_geometry(
   geometry->radius[2] = border->clipped_region.corners.bottom_right;
   geometry->radius[3] = border->clipped_region.corners.bottom_left;
   return true;
+}
+
+static unsigned persistent_capture_slots(const struct scene_animation* animation, const struct fx_renderer* renderer) {
+  unsigned capture_depth = 0;
+  for (unsigned slot = 0; slot < FX_ANIMATION_SLOTS; slot++) {
+    const struct fx_effect_shader* shader = animation->shaders[slot];
+    if (shader != NULL && shader->renderer == renderer && fx_slot_persistent(slot) && !fx_slot_in_place(slot)) {
+      capture_depth++;
+    }
+  }
+  return capture_depth;
+}
+
+static unsigned note_undamaged_persistent_usage(
+    struct fx_gles_render_pass* pass, const struct scene_animation* animation, const struct render_list_entry* entries,
+    int high, int low, const struct render_data* data
+) {
+  unsigned capture_depth = 0;
+  for (unsigned slot = 0; slot < FX_ANIMATION_SLOTS; slot++) {
+    const struct fx_effect_shader* shader = animation->shaders[slot];
+    if (shader == NULL || shader->renderer != pass->buffer->renderer || !fx_slot_persistent(slot)) {
+      continue;
+    }
+    if (fx_slot_in_place(slot)) {
+      pass->output_animation_used.in_place = true;
+    } else {
+      capture_depth++;
+    }
+  }
+  note_output_animation_depth(pass, data, pass->animation_depth + data->skipped_persistent_depth + capture_depth);
+  if (capture_depth > 0) {
+    struct wlr_scene* scene = data->output->scene;
+    for (int k = high; k >= low; k--) {
+      if (entries[k].node->type == WLR_SCENE_NODE_BLUR
+          && scene_blur_node_effective(scene, wlr_scene_blur_from_node(entries[k].node), NULL)) {
+        pass->output_animation_used.backdrop = true;
+        break;
+      }
+    }
+  }
+  return capture_depth;
 }
 
 static bool region_touches_box(const pixman_region32_t* region, const struct wlr_box* box) {
@@ -4552,6 +4667,9 @@ static void render_in_place_slots(
         transform_output_box(&shape_box, data);
       }
       if (!region_touches_box(clip, &shape_box)) {
+        if (animation->persistent && is_display_output_target(data)) {
+          pass->output_animation_used.in_place = true;
+        }
         return;
       }
       shape_known = true;
@@ -4697,6 +4815,37 @@ static void render_animated_range(
       }
       pixman_region32_fini(&bounds);
       pixman_region32_fini(&clip);
+      if (is_display_output_target(data)) {
+        // The reused capture skips the source's persistent captures, so their deepest nesting stays in use.
+        unsigned max_depth = 0;
+        for (int k = i; k >= end; k--) {
+          unsigned chain_depth = 0;
+          for (struct wlr_scene_node* cur = entries[k].node; cur != NULL;
+               cur = cur->parent != NULL ? &cur->parent->node : NULL) {
+            struct scene_animation* anc = scene_animation_get(cur);
+            if (anc != NULL && anc->persistent) {
+              chain_depth += persistent_capture_slots(anc, pass->buffer->renderer);
+            }
+            if (cur == animation->node) {
+              break;
+            }
+          }
+          if (chain_depth > max_depth) {
+            max_depth = chain_depth;
+          }
+        }
+        if (max_depth > 0) {
+          note_output_animation_depth(pass, data, pass->animation_depth + data->skipped_persistent_depth + max_depth);
+          struct wlr_scene* scene = data->output->scene;
+          for (int k = i; k >= end; k--) {
+            if (entries[k].node->type == WLR_SCENE_NODE_BLUR
+                && scene_blur_node_effective(scene, wlr_scene_blur_from_node(entries[k].node), NULL)) {
+              pass->output_animation_used.backdrop = true;
+              break;
+            }
+          }
+        }
+      }
       wlr_texture_destroy(cached.texture);
       cached = (struct shadow_cached_capture){0};
       i = end - 1;
@@ -4733,6 +4882,10 @@ static void render_animated_range(
     // A persistent slot this frame's damage misses would composite nothing and blank its history.
     const bool persistent_damaged =
         animation->persistent && persistent_effect_damaged(animation, data, has_clip ? &ancestor_clip : NULL);
+    unsigned skipped_depth = 0;
+    if (animation->persistent && !persistent_damaged && is_display_output_target(data)) {
+      skipped_depth = note_undamaged_persistent_usage(pass, animation, entries, i, end, data);
+    }
     bool isolated = false;
     if (animation->isolation_group != NULL
         && data->backdrop_group == NULL
@@ -4781,9 +4934,13 @@ static void render_animated_range(
         captured_any |= captured[slot];
       }
     }
+    if (captured_any) {
+      note_output_animation_depth(pass, data, pass->animation_depth + data->skipped_persistent_depth);
+    }
     // Without a capture to clip, the output clip limits the subtree and its in-place slots.
     struct render_data subtree_data;
     const struct render_data* subtree = data;
+    bool subtree_damage_owned = false;
     if (captured_any) {
       subtree_data = *data;
       subtree_data.capture_x -= anim_box.x;
@@ -4793,13 +4950,18 @@ static void render_animated_range(
       pixman_region32_translate(&subtree_data.damage, -anim_box.x, -anim_box.y);
       pixman_region32_intersect_rect(&subtree_data.damage, &subtree_data.damage, 0, 0, anim_box.width, anim_box.height);
       subtree = &subtree_data;
-    } else if (has_animation_clip) {
+      subtree_damage_owned = true;
+    } else if (has_animation_clip || skipped_depth > 0) {
       subtree_data = *data;
-      pixman_region32_init(&subtree_data.damage);
-      pixman_region32_copy(&subtree_data.damage, &data->damage);
-      pixman_region32_intersect_rect(
-          &subtree_data.damage, &subtree_data.damage, output_box.x, output_box.y, output_box.width, output_box.height
-      );
+      subtree_data.skipped_persistent_depth += skipped_depth;
+      if (has_animation_clip) {
+        pixman_region32_init(&subtree_data.damage);
+        pixman_region32_copy(&subtree_data.damage, &data->damage);
+        pixman_region32_intersect_rect(
+            &subtree_data.damage, &subtree_data.damage, output_box.x, output_box.y, output_box.width, output_box.height
+        );
+        subtree_damage_owned = true;
+      }
       subtree = &subtree_data;
     }
     render_animated_range(entries, i, end, animation->node, subtree);
@@ -4904,7 +5066,7 @@ static void render_animated_range(
       pixman_region32_fini(&output_clip);
     }
     pixman_region32_fini(&clip);
-    if (subtree == &subtree_data) {
+    if (subtree_damage_owned) {
       pixman_region32_fini(&subtree_data.damage);
     }
     i = end - 1;
@@ -5467,6 +5629,9 @@ static void render_output_effect(
   struct wlr_box box = *logical_box;
   transform_output_box(&box, data);
   if (!region_touches_box(&data->damage, &box)) {
+    if (!data->effect_capture) {
+      pass->output_animation_used.in_place = true;
+    }
     return;
   }
   const struct fx_effect_composite composite = {
@@ -6593,37 +6758,11 @@ bool wlr_scene_output_needs_frame(struct wlr_scene_output* scene_output) {
       || scene_output->gamma_lut_changed;
 }
 
-static bool should_blur_node_extend_damage(
-    struct wlr_scene* scene, struct wlr_scene_node* node, struct fx_gles_render_pass* fx_pass,
-    bool has_optimized_consumer, struct blur_data* blur_data
-) {
-  switch (node->type) {
-  case WLR_SCENE_NODE_BLUR:;
-    struct wlr_scene_blur* blur_node = wlr_scene_blur_from_node(node);
-    if (!scene_blur_node_effective(scene, blur_node, blur_data)) {
-      return false;
-    }
-    // No artifact prevention needed when the whole blur is already
-    // rendered
-    if (blur_node->should_only_blur_bottom_layer && blur_node->strength == 1.0f) {
-      fx_pass->has_blur = true;
-      return false;
-    }
-    return true;
-  case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
-    struct wlr_scene_optimized_blur* optimized_node = wlr_scene_optimized_blur_from_node(node);
-    return has_optimized_consumer && optimized_node->dirty && is_scene_blur_enabled(blur_data);
-  default:
-    return false;
-  }
-}
-
 static bool apply_blur_region(
     struct wlr_scene_node* node, struct blur_data* blur_data, struct render_data* render_data,
     struct wlr_output_state* output_state, const pixman_region32_t* original_damage,
     pixman_region32_t* blur_padding_region
 ) {
-  bool should_compensate_blur = false;
   const int sample_size = blur_data_calc_size(blur_data);
 
   pixman_region32_t node_visible_region;
@@ -6638,26 +6777,23 @@ static bool apply_blur_region(
 
   pixman_region32_t intersection;
   pixman_region32_init(&intersection);
+  struct wlr_output* output = render_data->output->output;
   if (pixman_region32_intersect(&intersection, &expanded_damage, &node_visible_region)) {
-    struct wlr_output* output = render_data->output->output;
     pixman_region32_intersect_rect(&intersection, &intersection, 0, 0, output->width, output->height);
   }
 
-  if (!pixman_region32_empty(&intersection)) {
-    should_compensate_blur = true;
-
+  const bool touched = !pixman_region32_empty(&intersection);
+  if (touched) {
     if (blur_padding_region == NULL) {
+      // Dirty optimized blur only needs the backdrop redrawn under its damaged region.
       wlr_region_expand(&intersection, &intersection, sample_size);
-      struct wlr_output* output = render_data->output->output;
       pixman_region32_intersect_rect(&intersection, &intersection, 0, 0, output->width, output->height);
     }
-    // Expand the render damage to re-render surrounding blur nodes
+    // Expand the render damage to re-render surrounding blur nodes, and make
+    // sure the backend knows about the new damage.
     pixman_region32_union(&render_data->damage, &render_data->damage, &intersection);
-    // Also make sure that the backend also knows about the new
-    // damage. Very important
     output_state->committed |= WLR_OUTPUT_STATE_DAMAGE;
     pixman_region32_union(&output_state->damage, &output_state->damage, &intersection);
-
     if (blur_padding_region != NULL) {
       // Expand it once more to get the blur padding region
       // which is key for artifact removal :)
@@ -6671,7 +6807,7 @@ static bool apply_blur_region(
   pixman_region32_fini(&intersection);
   pixman_region32_fini(&expanded_damage);
   pixman_region32_fini(&node_visible_region);
-  return should_compensate_blur;
+  return touched;
 }
 
 bool wlr_scene_output_commit(
@@ -7014,6 +7150,37 @@ static bool blur_samples_composition(
       || reads_composition
       || !fx_renderer_sdr_direct_matches_composition(buffer)
       || (has_blur && !fx_renderer_optimized_blur_ready(scene_output->output, buffer, needs_no_blur));
+}
+
+// A bottom-layer blur skips live drawing and saved-pixel compensation only when the
+// optimized cache matches the active target (and its unblurred copy exists for partial strength).
+static bool blur_defers_to_optimized(
+    struct wlr_scene_blur* blur, const struct render_data* data, const struct fx_gles_render_pass* pass,
+    bool optimized_ready, bool optimized_no_blur_ready
+) {
+  if (!blur->should_only_blur_bottom_layer || !optimized_ready) {
+    return false;
+  }
+  if (blur->strength < 1.0f && !optimized_no_blur_ready) {
+    return false;
+  }
+  return !blur_node_in_suboutput_capture(&blur->node, data, pass);
+}
+
+static bool scene_blur_is_live(
+    struct wlr_scene* scene, struct wlr_scene_node* node, const struct render_data* data,
+    const struct fx_gles_render_pass* pass, bool optimized_ready, bool optimized_no_blur_ready,
+    struct blur_data* effective, bool* used_optimized
+) {
+  struct wlr_scene_blur* blur_node = wlr_scene_blur_from_node(node);
+  if (!scene_blur_node_effective(scene, blur_node, effective)) {
+    return false;
+  }
+  if (blur_defers_to_optimized(blur_node, data, pass, optimized_ready, optimized_no_blur_ready)) {
+    *used_optimized = true;
+    return false;
+  }
+  return true;
 }
 
 static bool scene_output_build_state(
@@ -7476,8 +7643,14 @@ static bool scene_output_build_state(
     pixman_region32_union(&render_data.damage, &render_data.damage, &opt_damage);
     pixman_region32_fini(&opt_damage);
   }
+  fx_pass->trim_output_animation_buffers = !render_data.transient_effects
+      && render_data.persistent_visible
+      && pixman_region32_not_empty(&render_data.damage);
   fx_pass->output_buffer->capture_sdr = options->capture_sdr && fx_pass->has_color_transform;
   bool should_compensate_blur = false;
+  bool has_live_blur = false;
+  bool optimized_ready = blur_usage.has_optimized_consumer && fx_render_pass_has_usable_optimized_blur(fx_pass, fbos);
+  bool optimized_no_blur_ready = optimized_ready && fx_offscreen_buffers_has_optimized_no_blur(fbos);
   if (track_blur_damage && pixman_region32_not_empty(&render_data.damage)) {
     // Blur artifact prevention
     // Note: Supports individual blur node blur_data
@@ -7507,12 +7680,36 @@ static bool scene_output_build_state(
     for (int i = list_len - 1; i >= 0; i--) {
       struct render_list_entry* entry = &list_data[i];
       struct wlr_scene_node* node = entry->node;
-      struct blur_data blur_data = scene_output->scene->blur_data;
-      if (!should_blur_node_extend_damage(
-              scene_output->scene, node, fx_pass, blur_usage.has_optimized_consumer, &blur_data
-          )) {
+      if (node->type != WLR_SCENE_NODE_OPTIMIZED_BLUR && node->type != WLR_SCENE_NODE_BLUR) {
         continue;
       }
+      struct blur_data blur_data = scene_output->scene->blur_data;
+      if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
+        const struct wlr_scene_optimized_blur* optimized_node = wlr_scene_optimized_blur_from_node(node);
+        if (!blur_usage.has_optimized_consumer || !optimized_node->dirty || !is_scene_blur_enabled(&blur_data)) {
+          continue;
+        }
+        bool opt_touched = full_damage;
+        if (!opt_touched) {
+          opt_touched = apply_blur_region(node, &blur_data, &render_data, state, &original_damage, NULL);
+          opt_touched |= rebuild_optimized_blur;
+        }
+        if (opt_touched) {
+          fx_pass->has_blur = true;
+          optimized_ready = true;
+          optimized_no_blur_ready |= blur_usage.has_partial_optimized;
+        }
+        continue;
+      }
+      bool used_optimized = false;
+      if (!scene_blur_is_live(
+              scene_output->scene, node, &render_data, fx_pass, optimized_ready, optimized_no_blur_ready, &blur_data,
+              &used_optimized
+          )) {
+        fx_pass->has_blur |= used_optimized;
+        continue;
+      }
+      has_live_blur = true;
 
       if (!blur_composition && node->type == WLR_SCENE_NODE_BLUR) {
         fx_pass->has_blur = true;
@@ -7526,14 +7723,6 @@ static bool scene_output_build_state(
         should_compensate_blur = false;
         fx_pass->has_blur = true;
         break;
-      }
-
-      if (node->type == WLR_SCENE_NODE_OPTIMIZED_BLUR) {
-        if (apply_blur_region(node, &blur_data, &render_data, state, &original_damage, NULL)
-            || rebuild_optimized_blur) {
-          fx_pass->has_blur = true;
-        }
-        continue;
       }
 
       if (apply_blur_region(node, &blur_data, &render_data, state, &original_damage, &blur_padding_region)) {
@@ -7557,9 +7746,25 @@ static bool scene_output_build_state(
     }
 
     pixman_region32_fini(&blur_padding_region);
+  } else if (track_blur_damage) {
+    bool unused_opt = false;
+    for (int i = list_len - 1; i >= 0; i--) {
+      struct wlr_scene_node* node = list_data[i].node;
+      if (node->type == WLR_SCENE_NODE_BLUR
+          && scene_blur_is_live(
+              scene_output->scene, node, &render_data, fx_pass, optimized_ready, optimized_no_blur_ready, NULL,
+              &unused_opt
+          )) {
+        has_live_blur = true;
+        break;
+      }
+    }
   }
   if (track_blur_damage) {
     pixman_region32_fini(&original_damage);
+  }
+  if (!has_live_blur) {
+    fx_offscreen_buffers_clear_blur_saved_pixels(fbos);
   }
 
   if (fx_pass->has_blur || render_data.transient_effects || render_data.persistent_visible) {
@@ -7657,6 +7862,7 @@ static bool scene_output_build_state(
         render_data.sampled_earlier = true;
         render_workspace_scene(options, &render_data);
       } else {
+        fx_pass->trim_output_animation_buffers = false;
         cursors_drawn = true;
       }
     }
