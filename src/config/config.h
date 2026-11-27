@@ -963,6 +963,8 @@ namespace umbriel {
         bool enabled = true;
         int durationMs = 250;
         AnimationCurve curve{.easing = Easing::Spring, .spring = {.damping = 1.0, .stiffness = 900.0}};
+        // Deform a floating window like an elastic sheet during pointer resizes.
+        bool physics = false;
         bool operator==(const WindowsResize&) const = default;
       } windowsResize;
 
