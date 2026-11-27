@@ -1144,5 +1144,8 @@ namespace umbriel {
       m_server->cursor()->refocusAfterSceneChange();
     }
     refreshStateRuleEffects();
+    // The border effect gate reads scheduledFullscreen(); refresh it even when
+    // no animation is progressing (a frozen clock may never tick again).
+    syncAnimationEffects();
   }
 } // namespace umbriel
