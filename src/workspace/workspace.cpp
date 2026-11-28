@@ -1292,8 +1292,10 @@ namespace umbriel {
       }
 
       if (m_layout->columnOf(view) < 0) {
-        // Floating (non-fullscreen): clip + enable against the home output.
-        if (usableChanged) {
+        // Floating (non-fullscreen): clip + enable against the home output. The pointer owns a window it carries, so
+        // an arrange that follows a pad show, hide or output move leaves it where the drag put it.
+        Cursor* cursor = m_group->server()->cursor();
+        if (usableChanged && (cursor == nullptr || !cursor->isDraggingView(view))) {
           view->clampFloatingPosition();
         }
         syncViewPresentation(view);
