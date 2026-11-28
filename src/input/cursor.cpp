@@ -1747,6 +1747,8 @@ namespace umbriel {
         || wlr_seat_pointer_has_grab(m_server->seat()->wlr())
         || !press.view->mapped()
         || !press.view->presented()
+        || !press.view->titleBarIsOverlay()
+        || press.view->titleBarVisualHeight() == 0
         || press.view->blocked()
         || m_server->exclusiveKeyboardLayer() != nullptr
         || (m_server->overview() != nullptr && m_server->overview()->active())) {
@@ -2561,7 +2563,16 @@ namespace umbriel {
     if (m_overlayPress.view != nullptr && !m_overlayPress.released) {
       const double dx = m_cursor->x - m_overlayPress.x;
       const double dy = m_cursor->y - m_overlayPress.y;
-      if (m_server->sessionLocked() || !m_overlayPress.view->titleBarIsOverlay()) {
+      if (m_server->sessionLocked()
+          || !isPassthrough()
+          || wlr_seat_pointer_has_grab(m_server->seat()->wlr())
+          || m_server->exclusiveKeyboardLayer() != nullptr
+          || (m_server->overview() != nullptr && m_server->overview()->active())
+          || !m_overlayPress.view->mapped()
+          || !m_overlayPress.view->presented()
+          || m_overlayPress.view->blocked()
+          || !m_overlayPress.view->titleBarIsOverlay()
+          || m_overlayPress.view->titleBarVisualHeight() == 0) {
         m_swallowedButtons.push_back(BTN_LEFT);
         cancelOverlayPress();
       } else if (timeMsec - m_overlayPress.timeMsec >= kOverlayGestureMsec) {
