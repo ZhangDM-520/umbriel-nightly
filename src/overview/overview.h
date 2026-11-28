@@ -180,6 +180,39 @@ namespace umbriel {
     struct Card;
     struct OutputState;
 
+    struct CardLayoutKey {
+      wlr_box geometry{};
+      int worldWidth = 0;
+      int worldHeight = 0;
+      double zoom = -1.0;
+      float opacity = -1.0F;
+      float chromeAlpha = -1.0F;
+      bool liveTarget = false;
+      bool focused = false;
+      bool dragging = false;
+      bool fullscreen = false;
+      bool maximized = false;
+      bool urgent = false;
+
+      bool operator==(const CardLayoutKey& other) const {
+        return geometry.x == other.geometry.x
+            && geometry.y == other.geometry.y
+            && geometry.width == other.geometry.width
+            && geometry.height == other.geometry.height
+            && worldWidth == other.worldWidth
+            && worldHeight == other.worldHeight
+            && zoom == other.zoom
+            && opacity == other.opacity
+            && chromeAlpha == other.chromeAlpha
+            && liveTarget == other.liveTarget
+            && focused == other.focused
+            && dragging == other.dragging
+            && fullscreen == other.fullscreen
+            && maximized == other.maximized
+            && urgent == other.urgent;
+      }
+    };
+
     struct CardSurface {
       Card* card = nullptr;
       // The window whose surface tree holds `surface`: the card's own, or a dialog attached to it.
@@ -245,6 +278,8 @@ namespace umbriel {
       // The focus the pad member's ring had when its card was built. A pad member has no workspace, so the card keeps
       // the ring it was showing instead of deriving focus from one.
       bool focused = false;
+      std::optional<CardLayoutKey> cachedLayout;
+      bool effectsAnimating = false;
     };
 
     struct ShortcutAssignment {
@@ -271,6 +306,14 @@ namespace umbriel {
       wlr_scene_buffer* buffer = nullptr;
       wl_listener outputSample{};
       wl_listener frameDone{};
+      wlr_box lastSourceBox{};
+      int lastLocalX = 0;
+      int lastLocalY = 0;
+      int lastDestW = -1;
+      int lastDestH = -1;
+      int lastRadius = -1;
+      bool lastVisible = false;
+      bool opaqueDirty = true;
     };
 
     // Resolved stack entry, ordered bottom to top.
@@ -285,6 +328,13 @@ namespace umbriel {
       wlr_scene_tree* tree = nullptr;
       wlr_scene_rect* fill = nullptr;
       std::vector<std::unique_ptr<DesktopMirror>> mirrors;
+      int clipWidth = -1;
+      int clipHeight = -1;
+      int fillWidth = -1;
+      int fillHeight = -1;
+      int fillRadius = -1;
+      std::array<float, 4> fillColor{-1.0F, -1.0F, -1.0F, -1.0F};
+      bool fillEnabled = true;
     };
 
     struct OutputState {
@@ -412,6 +462,8 @@ namespace umbriel {
     void applyPinnedOpacity(float alpha) const;
     void layoutOutput(OutputState& state);
     void layoutCard(Card& card, const PreviewMetrics& metrics, double workspaceScroll, const View* liveTarget);
+    void hideCard(Card& card);
+    void layoutCardBadge(Card& card, const PreviewMetrics& metrics, int contentW, int contentH, int scaledRadius) const;
     // Refreshes a card's animation and persistent effect slots from its view.
     void syncCardEffects(Card& card);
     void syncCardEffects();
@@ -426,7 +478,7 @@ namespace umbriel {
     bool handleShortcutKey(uint32_t keysym);
     void refreshShortcutMatches();
     void clearShortcutInput();
-    void updateShortcutAssignments();
+    bool updateShortcutAssignments();
 
     // `releaseVelocity` is the speed a gesture left behind, in overview progress per second, and is zero for every
     // other caller: it starts the zoom spring from the speed the fingers had instead of from rest.
