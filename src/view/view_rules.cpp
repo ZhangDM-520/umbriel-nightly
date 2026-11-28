@@ -587,6 +587,7 @@ namespace umbriel {
           }
         }
         if (width > 0 && height > 0) {
+          cancelResizeGrab();
           requestFloatingSize(width, height);
           placeInUsableArea();
         }
@@ -604,6 +605,7 @@ namespace umbriel {
 
     if (!inScratchpad && !floatingGeometryAppliedOnTransition && floatingPositionChanged) {
       if (!m_tiled) {
+        cancelResizeGrab();
         placeInUsableArea(rule.defaultPosition);
       } else {
         m_pendingFloatingPosition = rule.defaultPosition;

@@ -293,8 +293,12 @@ namespace umbriel {
     }
     const bool settled = m_floating.retireSizeRequestIfSettled(sent.serial);
     if (settled) {
+      const bool pointerResizeSettled = m_pointerResizeSettling;
       m_floatingSizeConfigure.reset();
       m_pointerResizeSettling = false;
+      if (pointerResizeSettled && m_dragResizeEdges != DragPhysics::ResizeEdge::None) {
+        endResizePhysics();
+      }
       resetPresentedSurface();
     }
     return settled;

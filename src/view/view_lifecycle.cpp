@@ -752,7 +752,7 @@ namespace umbriel {
     wlr_scene_node_clear_animations(&m_contentTree->node);
     m_dragSlotBound = false;
     // The snapshot holds the frozen deformation; the live sheet ends here.
-    m_dragPhysics = DragPhysics{};
+    resetDragPhysics();
     // Land the resting tree so a later remap cannot reappear unclipped under the
     // drag tree. homeTree() is authoritative: the states above are already stripped.
     const bool needsRehome = m_pendingHomeParent != nullptr || m_sceneTree->node.parent == m_server->dragTree();
