@@ -231,8 +231,11 @@ namespace umbriel {
     // Border widths and corner_radius after this window's rule overrides; overview cards draw with the same ones.
     void setXdgDecorationPreference(std::optional<bool> serverSide);
     void setLegacyDecorationPreference(std::optional<bool> serverSide);
+    // External space reserved above client content. Overlay bars reserve none.
     int titleBarHeight() const;
     float dragOpacity() const;
+    int titleBarVisualHeight() const;
+    bool titleBarIsOverlay() const { return m_titleBarIsOverlay; }
     void syncSsdFrame();
     SsdFramePoint ssdFramePointAt(double lx, double ly) const;
     SsdFrame* ssdFrame() const { return m_ssdFrame.get(); }
@@ -1086,6 +1089,7 @@ namespace umbriel {
     std::optional<bool> m_xdgDecorationPreference;
     std::optional<bool> m_legacyDecorationPreference;
     std::optional<TitleBarMode> m_titleBarMode;
+    bool m_titleBarIsOverlay = false;
     bool wantsTitleBar(TitleBarMode mode) const;
     void refreshTitleBar();
     // A window rule's title_bar_buttons, which replaces [appearance.title_bar] buttons.

@@ -495,9 +495,18 @@ namespace umbriel {
       if (!view->mapped()
           || view->minimizeConcealing()
           || (!view->pinned() && !view->onActiveWorkspace())
-          || view->ssdFrame() == nullptr
-          || !view->ssdFrame()->contains(node)) {
+          || view->ssdFrame() == nullptr) {
         return std::nullopt;
+      }
+      if (!view->ssdFrame()->contains(node)) {
+        if (!view->titleBarIsOverlay() || node->type != WLR_SCENE_NODE_BUFFER) {
+          return std::nullopt;
+        }
+        auto* surface = wlr_scene_surface_try_from_buffer(wlr_scene_buffer_from_node(node));
+        // Popups and unrelated surfaces retain their normal input priority.
+        if (surface == nullptr || wlr_surface_get_root_surface(surface->surface) != view->rootSurface()) {
+          return std::nullopt;
+        }
       }
       const auto point = view->ssdFramePointAt(lx, ly);
       if (point.part == SsdFramePart::None) {

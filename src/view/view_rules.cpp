@@ -722,8 +722,13 @@ namespace umbriel {
       refreshScaleHints();
     }
     const std::optional<TitleBarMode> titleBarMode = rule.titleBar;
-    if (m_titleBarMode != titleBarMode) {
+    const bool overlay = rule.titleBarIsOverlay.value_or(false);
+    if (m_titleBarMode != titleBarMode || m_titleBarIsOverlay != overlay) {
       m_titleBarMode = titleBarMode;
+      m_titleBarIsOverlay = overlay;
+      if (m_workspace != nullptr) {
+        m_workspace->markArrange();
+      }
       refreshTitleBar();
     }
     if (m_titleBarButtons != rule.titleBarButtons) {

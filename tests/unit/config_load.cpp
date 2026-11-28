@@ -5810,6 +5810,34 @@ UMBRIEL_TEST(titleBarButtonsKeepOrderAndSkipBadEntries) {
   CHECK(!containsDiagnostic(store, "unknown key"));
 }
 
+UMBRIEL_TEST(titleBarOverlayRuleResolvesFalseOverridesAndDefaults) {
+  const TempConfig file;
+  file.write(R"(
+[[window_rule]]
+match.app_id = "^overlay$|^external$"
+title_bar_is_overlay = true
+[[window_rule]]
+match.app_id = "^overlay$"
+title_bar = "forced"
+[[window_rule]]
+match.app_id = "^external$"
+title_bar_is_overlay = false
+)");
+  auto& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+  CHECK(store.reload().success);
+  CHECK(store.diagnostics().empty());
+  const auto resolve = [&](const char* appId) {
+    return umbriel::resolveWindowRules(store.config(), appId, "title", std::nullopt, umbriel::ContentType::None, {}, 0);
+  };
+  CHECK(resolve("overlay").titleBarIsOverlay == true);
+  CHECK(resolve("external").titleBarIsOverlay == false);
+  CHECK(!resolve("other").titleBarIsOverlay.has_value());
+  file.write("[[window_rule]]\ntitle_bar_is_overlay = [false]\n");
+  CHECK(store.reload().success);
+  CHECK(containsDiagnostic(store, "title_bar_is_overlay"));
+}
+
 UMBRIEL_TEST(titleBarButtonsRuleOverridesOnlyWhenSet) {
   using umbriel::TitleBarButton;
   using Buttons = std::vector<TitleBarButton>;
