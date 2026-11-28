@@ -69,7 +69,17 @@ namespace umbriel {
     if (!m_fade.animating() || minimizeFadeActive()) {
       return false;
     }
-    return m_customFade || (!m_inScratchpad && effectRegistry().lifecycleEffect(AnimationEvent::WindowsIn) != nullptr);
+    // A scratchpad fade composites plain alpha unless a scratchpad shader is bound: its show, hide and restore are
+    // opacity transitions, not lifecycle openings.
+    const AnimationEvent event = fadeEvent();
+    if (event == AnimationEvent::Scratchpad) {
+      return m_customFade;
+    }
+    return m_customFade || effectRegistry().lifecycleEffect(event) != nullptr;
+  }
+
+  AnimationEvent View::fadeEvent() const {
+    return m_fadeEvent.value_or(m_inScratchpad ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn);
   }
 
   float View::effectiveOpacity() const {
@@ -153,6 +163,7 @@ namespace umbriel {
     }
     m_minimizePhase = MinimizePhase::None;
     m_fade.snap(1.0);
+    m_fadeEvent.reset();
     setFadeAlpha(1.0F);
     releaseOpeningPresentation();
     // A snapped fade stops reporting progress; re-sync so the tick's gate
@@ -163,7 +174,11 @@ namespace umbriel {
   }
 
   bool View::openingAnimationActive() const {
-    return m_mapped && !m_inScratchpad && m_fade.animating() && m_fade.target() > m_fade.from() && !sizeGrabActive();
+    return m_mapped
+        && fadeEvent() == AnimationEvent::WindowsIn
+        && m_fade.animating()
+        && m_fade.target() > m_fade.from()
+        && !sizeGrabActive();
   }
 
   void View::releaseOpeningPresentation(bool completed, bool pointerTakeover) {
@@ -180,7 +195,7 @@ namespace umbriel {
 
   bool View::tiledOpeningActive() const {
     return m_mapped
-        && !m_inScratchpad
+        && fadeEvent() == AnimationEvent::WindowsIn
         && m_tiled
         && !layoutFullscreen()
         && m_workspace != nullptr
@@ -190,7 +205,11 @@ namespace umbriel {
   }
 
   bool View::fullscreenOpeningActive() const {
-    return m_mapped && !m_inScratchpad && layoutFullscreen() && m_fade.animating() && m_fade.target() > m_fade.from();
+    return m_mapped
+        && fadeEvent() == AnimationEvent::WindowsIn
+        && layoutFullscreen()
+        && m_fade.animating()
+        && m_fade.target() > m_fade.from();
   }
 
   bool View::floatingOpeningActive() const { return openingAnimationActive() && !m_tiled && !layoutFullscreen(); }
@@ -1009,9 +1028,21 @@ namespace umbriel {
   }
 
   void View::animateFadeTo(float toAlpha, int durationMs, const AnimationCurve& curve) {
+    m_fadeEvent.reset();
     m_customFade = m_inScratchpad && effectRegistry().animationEffect(AnimationEvent::Scratchpad) != nullptr;
     m_fade.snap(m_fadeAlpha);
     m_fade.retarget(toAlpha, durationMs, curve);
+    scheduleFrame();
+  }
+
+  void View::beginScratchpadRestoreFade(int durationMs, const AnimationCurve& curve) {
+    // The view has already left the pad, so `m_inScratchpad` can no longer choose the event: the restore is the second
+    // half of the pad's fade and keeps its slot, its effect and its curve.
+    m_fadeEvent = AnimationEvent::Scratchpad;
+    m_customFade = effectRegistry().animationEffect(AnimationEvent::Scratchpad) != nullptr;
+    setFadeAlpha(0.0F);
+    m_fade.snap(0.0);
+    m_fade.retarget(1.0, durationMs, curve);
     scheduleFrame();
   }
 
@@ -1087,6 +1118,11 @@ namespace umbriel {
     if (target == nullptr) {
       return;
     }
+    // A fade that has finished no longer owns its event: the view goes back to the slot its membership chooses, so a
+    // later opening or pad fade binds its own program. The binding below then clears the slot the override used.
+    if (m_fadeEvent && !m_fade.animating()) {
+      m_fadeEvent.reset();
+    }
     if (!m_mapped) {
       wlr_scene_node_clear_animations(&target->node);
       if (ownTrees) {
@@ -1140,15 +1176,18 @@ namespace umbriel {
       m_dragSlotBound = false;
     }
     bindAnimationEffect(&target->node, AnimationEvent::DimUnfocused, m_focusDim);
-    const AnimationEvent fadeEvent = m_inScratchpad ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn;
-    if (m_inScratchpad || !minimizeFadeActive()) {
-      bindAnimationEffect(&target->node, fadeEvent, m_fade);
+    const AnimationEvent fade = fadeEvent();
+    if (fade == AnimationEvent::Scratchpad || !minimizeFadeActive()) {
+      bindAnimationEffect(&target->node, fade, m_fade);
     } else {
       // Drop a shader an earlier open bound to this node; minimize has no effect slot of its own.
-      clearAnimationEffect(&target->node, fadeEvent);
+      clearAnimationEffect(&target->node, fade);
     }
     wlr_scene_node_set_animation(
-        &target->node, static_cast<unsigned>(m_inScratchpad ? AnimationEvent::WindowsIn : AnimationEvent::Scratchpad),
+        &target->node,
+        static_cast<unsigned>(
+            fade == AnimationEvent::Scratchpad ? AnimationEvent::WindowsIn : AnimationEvent::Scratchpad
+        ),
         nullptr, nullptr
     );
     bindAnimationEffect(border, AnimationEvent::Border, m_borderColorAnim, m_borderFocusedState ? 1.0F : -1.0F);
@@ -1245,12 +1284,9 @@ namespace umbriel {
 
     if (m_fade.tick(nowMsec)) {
       progressed = true;
-      m_customFade = m_customFade
-          && m_fade.animating()
-          && effectRegistry().animationEffect(m_inScratchpad ? AnimationEvent::Scratchpad : AnimationEvent::WindowsIn)
-              != nullptr;
+      m_customFade = m_customFade && m_fade.animating() && effectRegistry().animationEffect(fadeEvent()) != nullptr;
       const float rawAlpha = std::clamp(static_cast<float>(m_fade.current()), 0.0F, 1.0F);
-      const bool builtInSlide = !m_inScratchpad
+      const bool builtInSlide = fadeEvent() == AnimationEvent::WindowsIn
           && !minimizeFadeActive()
           && !m_customFade
           && config().animation.windowsIn.style == "slide"
@@ -1264,7 +1300,7 @@ namespace umbriel {
       // opener can instead receive intermediate logical boxes from windows_move. Popin/zoom applies its inset to either
       // box, and a custom shader stays composed over the lifecycle presentation.
       const bool finishingTiledOpen = m_mapped
-          && !m_inScratchpad
+          && fadeEvent() == AnimationEvent::WindowsIn
           && m_tiled
           && !layoutFullscreen()
           && m_workspace != nullptr
@@ -1273,11 +1309,14 @@ namespace umbriel {
       // A fullscreen opener is presented inside the output box its layout assigned, which the arrange that follows
       // its map owns, and a floating one inside its position at the size its client draws now. Styles without an inset
       // leave the node where it rests.
-      const bool insetFullscreenOpen =
-          openingInsetPending() && m_mapped && !m_inScratchpad && layoutFullscreen() && m_fade.target() > m_fade.from();
+      const bool insetFullscreenOpen = openingInsetPending()
+          && m_mapped
+          && fadeEvent() == AnimationEvent::WindowsIn
+          && layoutFullscreen()
+          && m_fade.target() > m_fade.from();
       const bool insetFloatingOpen = openingInsetPending()
           && m_mapped
-          && !m_inScratchpad
+          && fadeEvent() == AnimationEvent::WindowsIn
           && !m_tiled
           && !layoutFullscreen()
           && m_fade.target() > m_fade.from();
@@ -1304,7 +1343,10 @@ namespace umbriel {
         }
       }
       active = active || m_fade.animating();
-      openingFinished = m_mapped && !m_inScratchpad && !m_fade.animating() && m_fade.target() > m_fade.from();
+      openingFinished = m_mapped
+          && fadeEvent() == AnimationEvent::WindowsIn
+          && !m_fade.animating()
+          && m_fade.target() > m_fade.from();
     }
     if (!m_fade.animating() && minimizeFadeActive()) {
       if (minimizeConcealing()) {
