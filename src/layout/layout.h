@@ -43,6 +43,14 @@ namespace umbriel {
     OnOverflow,
   };
 
+  // Where a scrolling strip narrower than the viewport comes to rest on the primary axis. The names are
+  // axis-neutral because horizontal workspaces scroll vertically: start is the top, end the bottom.
+  enum class UnderfullStripAlign {
+    Start,
+    Center,
+    End,
+  };
+
   struct LayoutStruts {
     int left = 0;
     int right = 0;
