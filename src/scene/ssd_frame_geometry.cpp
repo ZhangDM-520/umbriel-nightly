@@ -106,17 +106,21 @@ namespace umbriel {
 
   SsdFramePoint ssdFramePointAt(
       int cw, int ch, int h, int b, bool resizable, TitleBarButtonSide side, std::span<const TitleBarButton> shown,
-      const TitleBarButtonGeometry& geometry, double x, double y, int radius
+      const TitleBarButtonGeometry& geometry, double x, double y, int radius, bool overlay
   ) {
     if (cw <= 0 || ch <= 0 || h < 0) {
       return {};
     }
-    if (x >= 0 && x < cw && y >= -h && y < 0) {
+    const int top = overlay ? 0 : -h;
+    if (x >= 0 && x < cw && y >= top && y < std::min(ch, top + h)) {
       const TitleBarLayout layout = titleBarLayout(cw, h, side, shown, geometry, radius);
-      const auto inButton = [&layout, x, cw](TitleBarButton button) {
+      const auto inButton = [&layout, x, y, top, overlay, cw](TitleBarButton button) {
         const std::optional<wlr_box>& box = layout.button(button);
         if (!box) {
           return false;
+        }
+        if (overlay) {
+          return wlr_box_contains_point(&*box, x, y - top);
         }
         const int left = std::max(0, box->x - layout.gap / 2);
         const int right = std::min(cw, box->x + box->width + (layout.gap + 1) / 2);
@@ -133,10 +137,11 @@ namespace umbriel {
       }
       return {SsdFramePart::TitleBar, 0};
     }
+    const int outsideHeight = overlay ? 0 : h;
     if (!resizable
         || x < -b - kSsdResizeBand
         || x >= cw + b + kSsdResizeBand
-        || y < -h - b - kSsdResizeBand
+        || y < -outsideHeight - b - kSsdResizeBand
         || y >= ch + b + kSsdResizeBand) {
       return {};
     }
@@ -147,7 +152,7 @@ namespace umbriel {
     if (x >= cw) {
       edges |= WLR_EDGE_RIGHT;
     }
-    if (y < -h) {
+    if (y < -outsideHeight) {
       edges |= WLR_EDGE_TOP;
     }
     if (y >= ch) {
@@ -157,7 +162,7 @@ namespace umbriel {
       return {};
     }
     if ((edges & (WLR_EDGE_LEFT | WLR_EDGE_RIGHT)) != 0) {
-      if (y < -h - b + kSsdResizeCorner) {
+      if (y < -outsideHeight - b + kSsdResizeCorner) {
         edges |= WLR_EDGE_TOP;
       }
       if (y >= ch + b - kSsdResizeCorner) {

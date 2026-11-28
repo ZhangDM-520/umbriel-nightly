@@ -273,6 +273,7 @@ namespace umbriel {
                {"off", TitleBarMode::Off}}
           ),
           registry::choice("title_bar_color_source", &W::titleBarColorSource, titleBarColorSources()),
+          boolean("title_bar_is_overlay", &W::titleBarIsOverlay),
           registry::custom<W>(
               "title_bar_buttons", registry::KeyDescription("string_array").withValues(titleBarButtonNames()),
               [](const toml::node& node, const std::string& path, W& target, registry::ReadContext&) {

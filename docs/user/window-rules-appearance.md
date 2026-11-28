@@ -34,6 +34,7 @@ blur = true
 | `corner_radius`                  | global  | Override `appearance.corner_radius`, 0 to 100.                                                                                      |
 | `shadow`                         | global  | Override `appearance.shadow.enabled`.                                                                                               |
 | `title_bar`                      | global  | `"on"`, `"negotiated"`, `"forced"`, or `"off"`; overrides `appearance.title_bar.mode`.                                              |
+| `title_bar_is_overlay` | `false` | Overlay the buttons on the top of client content with a transparent background and no title text. See [Overlay title bars](title-bars.md#overlay-title-bars). |
 | `title_bar_buttons`              | global  | Override `appearance.title_bar.buttons`: any of `"minimize"`, `"maximize"`, `"close"` from the title outward, or `[]` for none.     |
 | `title_bar_color_source`         | global  | `"fixed"`, `"window"`, or `"average"`; overrides `appearance.title_bar.color_source`. See [Title bars](title-bars.md#color-source). |
 | `title_bar_background`           | global  | Override `colors.title_bar.background`.                                                                                             |

@@ -340,6 +340,10 @@ namespace umbriel {
     void warpTo(double lx, double ly, bool allowFocusChange);
     void processMotion(uint32_t timeMsec, double oldX, double oldY, bool allowFocusChange = true);
     void processButton(const void* source, uint32_t timeMsec, uint32_t button, wl_pointer_button_state state);
+    void cancelOverlayPress();
+    void forwardOverlayPress(uint32_t timeMsec);
+    static int onOverlayPressTimer(void* data);
+    static void onOverlaySurfaceDestroy(wl_listener* listener, void* data);
     void dispatchButton(const void* source, uint32_t timeMsec, uint32_t button, wl_pointer_button_state state);
     void updatePointerOutput(bool allowFocusChange = true);
     View* hoverFocus(
@@ -505,6 +509,18 @@ namespace umbriel {
       View* view = nullptr;
       SsdFramePart part = SsdFramePart::None;
     } m_ssdButtonPress;
+    struct OverlayPress {
+      View* view = nullptr;
+      wlr_surface* surface = nullptr;
+      double x = 0;
+      double y = 0;
+      double sx = 0;
+      double sy = 0;
+      uint32_t timeMsec = 0;
+      bool released = false;
+    } m_overlayPress;
+    wl_event_source* m_overlayPressTimer = nullptr;
+    wl_listener m_overlaySurfaceDestroy{};
     View* m_ssdHoverView = nullptr;
     std::vector<std::unique_ptr<TabletToolState>> m_tools;
     bool m_hoverFocusInvalidated = false;

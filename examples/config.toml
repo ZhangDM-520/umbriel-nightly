@@ -457,6 +457,7 @@ default_pinned = true
 # [[window_rule]]
 # match.is_maximized_to_edges = true
 # title_bar = "off"
+# title_bar_is_overlay = false
 
 # Frame the window being screencast; viewers never see the frame.
 # [[window_rule]]

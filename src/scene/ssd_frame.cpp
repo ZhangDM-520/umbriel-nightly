@@ -209,7 +209,7 @@ namespace umbriel {
     ++m_commitGeneration;
     // A palette bar reads nothing back and judges nothing against the edge, so a client commit cannot move what it
     // shows: the fill is the palette and the contrast rule already knows it. Skip the per-commit bookkeeping entirely.
-    if (colorSource() == TitleBarColorSource::Fixed) {
+    if (!m_geometry.titleBarIsOverlay && colorSource() == TitleBarColorSource::Fixed) {
       return;
     }
     refreshFill(true);
@@ -298,7 +298,7 @@ namespace umbriel {
       const auto& colors = m_titleBarColors;
       const bool backgrounds = m_style.buttonBackground;
       const auto symbolOnBar = [&](TitleBarButton which) {
-        if (!backgrounds) {
+        if (m_geometry.titleBarIsOverlay || !backgrounds) {
           return true;
         }
         switch (which) {
@@ -369,7 +369,8 @@ namespace umbriel {
     const auto& colors = m_titleBarColors;
     const float backgroundAlpha = (m_focused ? colors.background : colors.backgroundUnfocused)[3];
     // The title bar has its own transparency, independent of the client's opaque region or alpha mask.
-    const bool enabled = m_tree->node.enabled
+    const bool enabled = !m_geometry.titleBarIsOverlay
+        && m_tree->node.enabled
         && cfg.enabled
         && m_blurOptions.enabled.value_or(false)
         && backgroundAlpha * m_alpha < 1.0F
@@ -525,7 +526,10 @@ namespace umbriel {
     return results;
   }
 
-  TitleBarColorSource SsdFrame::colorSource() const { return m_colorSourceOverride.value_or(m_style.colorSource); }
+  TitleBarColorSource SsdFrame::colorSource() const {
+    return m_geometry.titleBarIsOverlay ? TitleBarColorSource::Window
+                                        : m_colorSourceOverride.value_or(m_style.colorSource);
+  }
 
   std::optional<std::array<float, 4>> SsdFrame::barFillColor() const {
     const auto& colors = m_titleBarColors;
@@ -549,6 +553,9 @@ namespace umbriel {
   }
 
   std::array<float, 4> SsdFrame::fillAsShown(const std::array<float, 4>& fill) const {
+    if (m_geometry.titleBarIsOverlay) {
+      return fill;
+    }
     const auto& colors = m_titleBarColors;
     const std::array<float, 4>& palette = m_focused ? colors.background : colors.backgroundUnfocused;
     // Only an adaptive fill is drawn dimmed over the palette when the window is inactive; a fixed bar is the palette
@@ -566,6 +573,9 @@ namespace umbriel {
     const auto index = static_cast<size_t>(which);
     if (m_glyphSamples[index].has_value()) {
       return fillAsShown(*m_glyphSamples[index]);
+    }
+    if (m_geometry.titleBarIsOverlay) {
+      return std::nullopt;
     }
     if (m_glyphSampleEmpty[index]) {
       // A transparent edge shows the palette through the mirrored bar, which is what the symbol sits on.
@@ -621,7 +631,7 @@ namespace umbriel {
     // Only the contrast rule turns a resolved color into a repaint; the mirror follows the commit on its own. A symbol
     // on its own button color never sees a sample, but a bare one does, so a sample under any button can move it.
     const auto& style = m_style;
-    if (!style.titleContrast) {
+    if (!style.titleContrast && !m_geometry.titleBarIsOverlay) {
       return false;
     }
     if (resolvedTitleColor() == title
@@ -684,7 +694,8 @@ namespace umbriel {
     // strip, and the crop happens upright so a quarter turn does not take its offset off the wrong buffer axis.
     const wlr_fbox strip = titleBarStripSourceBox(
         base, buffer->width, buffer->height, m_contentGeometry, m_content->current.width, m_content->current.height,
-        static_cast<uint32_t>(m_content->current.transform), style.colorSourceHeight
+        static_cast<uint32_t>(m_content->current.transform),
+        m_geometry.titleBarIsOverlay ? m_geometry.titleBarHeight : style.colorSourceHeight
     );
     // Damage is in buffer coordinates, like the strip, and belongs to the commit that produced it, so a later chrome
     // repaint does not replay it.
@@ -699,7 +710,8 @@ namespace umbriel {
     // A mode switch is not a commit, so it must force the work: otherwise an idle window keeps the stale color.
     const bool modeChanged = m_adaptiveMode != source;
     // Only "window" mirrors without reading, so only there does a sample add anything; the key has no effect elsewhere.
-    const bool sampling = source == TitleBarColorSource::Window && style.titleContrast && style.titleContrastSample;
+    const bool sampling = source == TitleBarColorSource::Window
+        && (m_geometry.titleBarIsOverlay || (style.titleContrast && style.titleContrastSample));
     const bool samplingChanged = m_contrastSampling != sampling;
     m_contrastSampling = sampling;
     if (!sampling) {
@@ -730,10 +742,13 @@ namespace umbriel {
         }
         return titleBarStripSourceBox(
             base, buffer->width, buffer->height, m_contentGeometry, m_content->current.width, m_content->current.height,
-            static_cast<uint32_t>(m_content->current.transform), style.colorSourceHeight, fraction, start
+            static_cast<uint32_t>(m_content->current.transform),
+            m_geometry.titleBarIsOverlay ? m_geometry.titleBarHeight : style.colorSourceHeight, fraction, start
         );
       };
-      sampleBoxes[0] = spanBox(m_sampleSpans[0]);
+      if (!m_geometry.titleBarIsOverlay || !m_sampleSpans[0].empty()) {
+        sampleBoxes[0] = spanBox(m_sampleSpans[0]);
+      }
       if (sampling) {
         for (size_t index = 0; index < kTitleBarButtonCount; ++index) {
           if (!m_sampleSpans[1 + index].empty()) {
@@ -809,6 +824,12 @@ namespace umbriel {
       }
       }
     }
+    if (m_geometry.titleBarIsOverlay) {
+      hideAdaptive();
+      m_adaptiveMode = source;
+      m_adaptiveStrip = strip;
+      return;
+    }
     // The smear mirrors the strip, so it re-mirrors on every attach: the bar must not keep drawing a buffer the client
     // may have freed. The average carries no detail, so only a change inside the sampled region makes it read again.
     wlr_buffer* shown = buffer;
@@ -882,14 +903,13 @@ namespace umbriel {
   clipped_region SsdFrame::frameClip(int x, int y, int outset) const {
     outset = std::clamp(outset, 0, m_geometry.borderInset);
     const int radius = zoomed(nestedRadius(m_geometry.cornerRadius, m_geometry.borderInset - outset));
-    if (radius <= 0) {
+    if (radius <= 0 && !m_geometry.titleBarIsOverlay) {
       return {};
     }
     return {
         .area =
-            {zoomed(-outset) - x, zoomed(-m_geometry.titleBarHeight - outset) - y,
-             zoomed(m_geometry.contentWidth + 2 * outset),
-             zoomed(m_geometry.contentHeight + m_geometry.titleBarHeight + 2 * outset)},
+            {zoomed(-outset) - x, zoomed(-reservedHeight() - outset) - y, zoomed(m_geometry.contentWidth + 2 * outset),
+             zoomed(m_geometry.contentHeight + reservedHeight() + 2 * outset)},
         .corners = corner_radii_all(radius),
         .inside = true,
     };
@@ -1008,7 +1028,7 @@ namespace umbriel {
     const bool backgrounds = style.buttonBackground;
     float color[4];
     const auto& background = m_focused ? colors.background : colors.backgroundUnfocused;
-    premultiplied(color, background, m_alpha);
+    premultiplied(color, background, m_geometry.titleBarIsOverlay ? 0.0F : m_alpha);
     wlr_scene_rect_set_color(m_background, color);
     const float contrast = luminance(background) < 0.5F ? 1.0F : 0.0F;
     const auto button = [&](wlr_scene_rect* rect, const std::array<float, 4>& base,
@@ -1037,14 +1057,15 @@ namespace umbriel {
       // separately, so a symbol is judged against the edge under its own button rather than the one under the title.
       std::optional<std::array<float, 4>> symbolBackground;
       if (backgrounds && value[3] > 0.0F) {
-        const auto bar = displayedBarColor();
+        const auto bar = m_geometry.titleBarIsOverlay ? glyphBackground(which) : displayedBarColor();
         symbolBackground = bar.has_value() && (alpha < 1.0F || value[3] < 1.0F)
             ? std::optional(asShownBarColor(value, alpha, *bar))
             : std::optional(value);
       } else {
         symbolBackground = glyphBackground(which);
       }
-      const std::array<float, 4> glyphColor = style.titleContrast && symbolBackground.has_value()
+      const std::array<float, 4> glyphColor =
+          (style.titleContrast || m_geometry.titleBarIsOverlay) && symbolBackground.has_value()
           ? contrastAdjusted(configured, *symbolBackground)
           : configured;
       const bool glyphVisible = style.buttonGlyph == TitleBarButtonGlyph::Always
@@ -1098,12 +1119,14 @@ namespace umbriel {
       );
       rect->accepts_input = !m_preview;
     };
+    const int outside = reservedHeight();
+    const int top = g.titleBarIsOverlay ? 0 : -h;
     const int band = g.borderInset + kSsdResizeBand;
     const std::array<wlr_box, 4> grips{{
-        {-band, -h - band, g.contentWidth + 2 * band, band},
+        {-band, -outside - band, g.contentWidth + 2 * band, band},
         {-band, g.contentHeight, g.contentWidth + 2 * band, band},
-        {-band, -h, band, g.contentHeight + h},
-        {g.contentWidth, -h, band, g.contentHeight + h},
+        {-band, -outside, band, g.contentHeight + outside},
+        {g.contentWidth, -outside, band, g.contentHeight + outside},
     }};
     for (size_t i = 0; i < m_grips.size(); ++i) {
       place(m_grips[i], grips[i]);
@@ -1115,7 +1138,8 @@ namespace umbriel {
       updateBlur();
       return;
     }
-    place(m_background, {0, -h, g.contentWidth, h});
+    place(m_background, {0, top, g.contentWidth, g.titleBarIsOverlay ? std::min(h, g.contentHeight) : h});
+    m_background->accepts_input = !m_preview && !g.titleBarIsOverlay;
     wlr_scene_rect_set_clipped_region(
         m_background, frameClip(m_background->node.x, m_background->node.y, m_opaqueBorderInset)
     );
@@ -1132,7 +1156,7 @@ namespace umbriel {
         return;
       }
       wlr_box box = *slot;
-      box.y -= h;
+      box.y += top;
       place(button, box);
       const int buttonRadius = style.buttonCornerRadius >= 0 ? style.buttonCornerRadius : g.cornerRadius;
       wlr_scene_rect_set_corner_radius(button, std::min(zoomed(box.width) / 2, zoomed(buttonRadius)));
@@ -1147,7 +1171,7 @@ namespace umbriel {
     // Any bar can be any color, so the title carries a dark edge unless it is turned off. It is painted into the same
     // buffer, one pixel down and right, so the bar holds one node and the shared cache one entry per title.
     const bool shadowed = style.titleShadow && textColor[3] > 0.0F;
-    const TabLabel* label = measureTitle(textColor, 1.0F, parts, radius, shadowed);
+    const TabLabel* label = g.titleBarIsOverlay ? nullptr : measureTitle(textColor, 1.0F, parts, radius, shadowed);
     // Held before anything else can ask the cache for a label and evict this one. The frame keeps the lock for
     // snapshots.
     holdLabelBuffer(m_labelBuffer, label != nullptr ? label->buffer : nullptr);
@@ -1175,7 +1199,7 @@ namespace umbriel {
       wlr_scene_buffer_set_dest_size(
           m_label, std::max(1, zoomed(label->bufferWidth)), std::max(1, zoomed(label->bufferHeight))
       );
-      wlr_scene_node_set_position(&m_label->node, zoomed(labelX), zoomed(-h + (h - labelHeight) / 2));
+      wlr_scene_node_set_position(&m_label->node, zoomed(labelX), zoomed(top + (h - labelHeight) / 2));
       clipBuffer(m_label);
     }
     updateColors();
@@ -1198,7 +1222,7 @@ namespace umbriel {
     return ssdFramePointAt(
         m_geometry.contentWidth, m_geometry.contentHeight, m_geometry.titleBarHeight, m_geometry.borderInset,
         m_resizable, style.buttonPosition, visibleButtons(), style.buttonGeometry(), x, y,
-        nestedRadius(m_geometry.cornerRadius, m_geometry.borderInset)
+        nestedRadius(m_geometry.cornerRadius, m_geometry.borderInset), m_geometry.titleBarIsOverlay
     );
   }
 

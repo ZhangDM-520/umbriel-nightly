@@ -493,4 +493,23 @@ UMBRIEL_TEST(sampleSpanStaysInsideTheBar) {
   CHECK(!leading.empty());
 }
 
+UMBRIEL_TEST(overlayButtonsAndResizeUseClientCoordinates) {
+  const auto at = [](double x, double y) {
+    return ssdFramePointAt(480, 300, 28, 2, true, TitleBarButtonSide::Right, kAll, kDerived, x, y, 0, true);
+  };
+  CHECK_EQ(at(466, 14).part, SsdFramePart::Close);
+  CHECK_EQ(at(444, 14).part, SsdFramePart::Maximize);
+  CHECK_EQ(at(422, 14).part, SsdFramePart::Minimize);
+  CHECK_EQ(at(200, 14).part, SsdFramePart::TitleBar);
+  // Only the button boxes intercept input; the padding and gaps pass to the client.
+  CHECK_EQ(at(466, 1).part, SsdFramePart::TitleBar);
+  CHECK_EQ(at(455, 14).part, SsdFramePart::TitleBar);
+  CHECK_EQ(at(200, 28).part, SsdFramePart::None);
+  CHECK_EQ(at(200, -3).part, SsdFramePart::Resize);
+  CHECK_EQ(at(200, -3).edges, uint32_t{WLR_EDGE_TOP});
+  CHECK_EQ(at(200, -29).part, SsdFramePart::None);
+  CHECK_EQ(at(-3, 100).edges, uint32_t{WLR_EDGE_LEFT});
+  CHECK_EQ(at(483, 303).edges, uint32_t{WLR_EDGE_RIGHT | WLR_EDGE_BOTTOM});
+}
+
 int main() { return RUN_TESTS(); }

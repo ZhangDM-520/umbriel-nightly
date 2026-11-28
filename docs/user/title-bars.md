@@ -21,6 +21,21 @@ To choose per application or per layout, use the `title_bar` key in [Appearance 
 
 `"negotiated"` leaves apps that draw their own headerbar, or open frameless windows on purpose, without a bar. X11 windows follow their decoration hints in both `"on"` and `"negotiated"`. Popups never get a bar.
 
+## Overlay title bars
+
+A `title_bar_is_overlay = true` window rule places the title bar inside the upper part of the application's content without reserving space above it. The background is transparent, title text and title-bar blur are disabled, and buttons retain their configured appearance and actions. Button symbols use `title_contrast` correction with samples from the covered application content, including when the global contrast or sampling settings are disabled. Fullscreen and tiled tab groups suppress overlay bars under the same rules as external bars.
+
+```toml
+[[window_rule]]
+match.app_id = "^my-app$"
+title_bar = "forced"
+title_bar_is_overlay = true
+```
+
+`title_bar_is_overlay` defaults to `false` and controls placement; `title_bar` controls whether the bar is visible. Rules and config reloads update open windows.
+
+Buttons consume their clicks. Elsewhere in the overlay, a left press waits up to 100 ms: moving more than 8 logical pixels within that interval starts a window move. A press held for 100 ms is forwarded to the application with the current timestamp; subsequent motion and release belong to the application. A short click waits 100 ms after release for a second press within 8 pixels. That second press toggles maximization and consumes both clicks; otherwise the first click is forwarded at its original client position. Other mouse buttons and scrolling pass through, and modifier-based window moves retain their usual behavior. Application drags in this area require holding the press through the initial 100 ms.
+
 ## Settings
 
 ```toml

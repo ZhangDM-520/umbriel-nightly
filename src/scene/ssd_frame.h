@@ -66,6 +66,7 @@ namespace umbriel {
     void setStyle(const Config::Appearance::TitleBar& style);
     bool maximizeEnabled() const { return m_maximizeEnabled; }
     int titleBarHeight() const { return m_geometry.titleBarHeight; }
+    int reservedHeight() const { return m_geometry.titleBarIsOverlay ? 0 : titleBarHeight(); }
     bool contains(const wlr_scene_node* node) const;
     SsdFramePoint pointAt(double x, double y) const;
     void snapshot(wlr_scene_tree* parent) const;

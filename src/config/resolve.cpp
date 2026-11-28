@@ -398,6 +398,9 @@ namespace umbriel {
       if (rule.titleBar) {
         resolved.titleBar = rule.titleBar;
       }
+      if (rule.titleBarIsOverlay) {
+        resolved.titleBarIsOverlay = rule.titleBarIsOverlay;
+      }
       if (rule.titleBarButtons) {
         resolved.titleBarButtons = rule.titleBarButtons;
       }

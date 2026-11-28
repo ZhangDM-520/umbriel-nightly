@@ -797,7 +797,8 @@ namespace umbriel {
       entry["xdg_tag"] = view.xdgTag().value_or("");
       entry["content_type"] = contentTypeName(view.contentType());
       entry["floating"] = view.floating();
-      entry["title_bar"] = view.titleBarHeight() > 0;
+      entry["title_bar"] = view.titleBarVisualHeight() > 0;
+      entry["title_bar_is_overlay"] = view.titleBarIsOverlay();
       entry["fullscreen"] = view.scheduledFullscreen();
       entry["maximized"] = view.scheduledMaximized();
       entry["maximized_to_edges"] = view.maximizedToEdges();

@@ -68,10 +68,10 @@ namespace umbriel {
   // Left edge of a title `labelWidth` wide in a bar `width` wide. `Center` takes the middle of the whole bar and slides
   // toward the open side when that would put the title under the buttons.
   int titleBarLabelX(const TitleBarLayout& layout, int width, int labelWidth, TitleAlign align);
-  // Coordinates relative to client content; the title bar lies above y = 0.
+  // Coordinates relative to client content; external bars lie above y = 0, overlay bars start at y = 0.
   SsdFramePoint ssdFramePointAt(
       int cw, int ch, int h, int b, bool resizable, TitleBarButtonSide side, std::span<const TitleBarButton> shown,
-      const TitleBarButtonGeometry& geometry, double x, double y, int radius = 0
+      const TitleBarButtonGeometry& geometry, double x, double y, int radius = 0, bool overlay = false
   );
   wlr_box contentBoxInTile(const wlr_box& tile, int titleBarHeight);
   // How many logical pixels of the window's top edge an adaptive title bar can take: one flat color row up to a few

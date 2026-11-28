@@ -49,6 +49,7 @@ namespace umbriel {
     // deferred resize grab share one boundary: inside it a press may still
     // pair up, so no grab may run and drop the layout's maximize bookkeeping.
     constexpr uint32_t kDoubleClickMsec = 300;
+    constexpr uint32_t kOverlayGestureMsec = 100;
     constexpr double kDoubleClickSlop = 8.0;
 
     // Panels (top/overlay) keep working inside the overview. Background- and bottom-layer surfaces are part of the
@@ -209,6 +210,10 @@ namespace umbriel {
   }
 
   Cursor::~Cursor() {
+    cancelOverlayPress();
+    if (m_overlayPressTimer != nullptr) {
+      wl_event_source_remove(m_overlayPressTimer);
+    }
     if (m_dropZoneDwellTimer != nullptr) {
       wl_event_source_remove(m_dropZoneDwellTimer);
     }
@@ -1712,6 +1717,64 @@ namespace umbriel {
     beginResize(grab.view, grab.edges, grab.button);
   }
 
+  void Cursor::cancelOverlayPress() {
+    if (m_overlaySurfaceDestroy.link.next != nullptr) {
+      wl_list_remove(&m_overlaySurfaceDestroy.link);
+      m_overlaySurfaceDestroy.link = {};
+    }
+    if (m_overlayPressTimer != nullptr) {
+      wl_event_source_timer_update(m_overlayPressTimer, 0);
+    }
+    m_overlayPress = {};
+  }
+
+  void Cursor::onOverlaySurfaceDestroy(wl_listener* listener, void*) {
+    Cursor* self = wl_container_of(listener, self, m_overlaySurfaceDestroy);
+    if (!self->m_overlayPress.released) {
+      self->m_swallowedButtons.push_back(BTN_LEFT);
+    }
+    self->cancelOverlayPress();
+  }
+
+  void Cursor::forwardOverlayPress(uint32_t timeMsec) {
+    const OverlayPress press = m_overlayPress;
+    if (press.view == nullptr) {
+      return;
+    }
+    cancelOverlayPress();
+    if (m_server->sessionLocked()
+        || !isPassthrough()
+        || wlr_seat_pointer_has_grab(m_server->seat()->wlr())
+        || !press.view->mapped()
+        || !press.view->presented()
+        || press.view->blocked()
+        || m_server->exclusiveKeyboardLayer() != nullptr
+        || (m_server->overview() != nullptr && m_server->overview()->active())) {
+      if (!press.released) {
+        m_swallowedButtons.push_back(BTN_LEFT);
+      }
+      return;
+    }
+    auto* seat = m_server->seat()->wlr();
+    // Replay at the original client position; the implicit grab then carries real motion and release.
+    setPointerFocus(press.surface, press.sx, press.sy, timeMsec);
+    m_server->seat()->notifyPointerModifiers();
+    const uint32_t serial = wlr_seat_pointer_notify_button(seat, timeMsec, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+    if (press.released) {
+      wlr_seat_pointer_notify_button(seat, timeMsec, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+    } else if (serial != 0) {
+      m_clientPointerPress = ClientPointerPress{.button = BTN_LEFT, .serial = serial, .x = press.x, .y = press.y};
+    }
+    processMotion(timeMsec, press.x, press.y, false);
+    wlr_seat_pointer_notify_frame(seat);
+  }
+
+  int Cursor::onOverlayPressTimer(void* data) {
+    auto* self = static_cast<Cursor*>(data);
+    self->forwardOverlayPress(monotonicMsec());
+    return 0;
+  }
+
   void Cursor::processButton(const void* source, uint32_t timeMsec, uint32_t button, wl_pointer_button_state state) {
     dispatchButton(source, timeMsec, button, state);
     if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
@@ -1736,6 +1799,47 @@ namespace umbriel {
       // click still reaches whatever it hit.
       if (QuitConfirm* confirm = m_server->quitConfirm(); confirm != nullptr && confirm->visible()) {
         m_server->dismissConfirmation();
+      }
+    }
+
+    if (m_overlayPress.view != nullptr) {
+      if (m_server->sessionLocked()) {
+        if (!m_overlayPress.released) {
+          m_swallowedButtons.push_back(BTN_LEFT);
+        }
+        cancelOverlayPress();
+      } else if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_RELEASED && !m_overlayPress.released) {
+        if (timeMsec - m_overlayPress.timeMsec >= kOverlayGestureMsec) {
+          // An input event can arrive before an overdue timer is dispatched.
+          forwardOverlayPress(timeMsec);
+          m_clientPointerPress.reset();
+        } else {
+          m_overlayPress.released = true;
+          m_overlayPress.timeMsec = timeMsec;
+          wl_event_source_timer_update(m_overlayPressTimer, kOverlayGestureMsec);
+          return;
+        }
+      } else if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        const auto hit = m_server->ssdFrameAt(m_cursor->x, m_cursor->y);
+        const double dx = m_cursor->x - m_overlayPress.x;
+        const double dy = m_cursor->y - m_overlayPress.y;
+        if (button == BTN_LEFT
+            && m_overlayPress.released
+            && timeMsec - m_overlayPress.timeMsec < kOverlayGestureMsec
+            && hit
+            && hit->view == m_overlayPress.view
+            && !hit->view->blocked()
+            && hit->part == SsdFramePart::TitleBar
+            && dx * dx + dy * dy <= kDoubleClickSlop * kDoubleClickSlop) {
+          View* target = m_overlayPress.view;
+          cancelOverlayPress();
+          m_swallowedButtons.push_back(BTN_LEFT);
+          const bool maximized =
+              target->maximizedToEdges() || target->scheduledMaximized() || target->floatingMaximized();
+          target->setMaximizedLikeClientRequest(!maximized);
+          return;
+        }
+        forwardOverlayPress(timeMsec);
       }
     }
 
@@ -1971,42 +2075,63 @@ namespace umbriel {
         view = hit->view;
       } else if (hit) {
         View* target = hit->view;
-        clearPointerFocus();
-        if (button == BTN_LEFT && hit->part == SsdFramePart::Resize) {
-          m_server->focusView(target, FocusReason::Grab);
-          if (beginResize(target, hit->edges, button)) {
-            return;
-          }
-        } else if (button == BTN_LEFT && hit->part == SsdFramePart::TitleBar) {
-          m_server->focusView(target, FocusReason::PointerPress);
-          const double dx = m_cursor->x - m_lastTitleBarClick.x;
-          const double dy = m_cursor->y - m_lastTitleBarClick.y;
-          if (m_lastTitleBarClick.view == target
-              && timeMsec - m_lastTitleBarClick.timeMsec <= kDoubleClickMsec
-              && dx * dx + dy * dy <= kDoubleClickSlop * kDoubleClickSlop) {
-            m_lastTitleBarClick = {};
-            const bool maximized =
-                target->maximizedToEdges() || target->scheduledMaximized() || target->floatingMaximized();
-            target->setMaximizedLikeClientRequest(!maximized);
-          } else {
-            m_lastTitleBarClick = {timeMsec, m_cursor->x, m_cursor->y, target};
-            if (beginMove(target, button, true)) {
+        if (target->titleBarIsOverlay() && hit->part == SsdFramePart::TitleBar) {
+          // Background/text never take scene input. Only defer an unmodified left press on client content.
+          if (button == BTN_LEFT
+              && state == WL_POINTER_BUTTON_STATE_PRESSED
+              && surface != nullptr
+              && !target->blocked()) {
+            if (m_overlayPressTimer == nullptr) {
+              m_overlayPressTimer =
+                  wl_event_loop_add_timer(wl_display_get_event_loop(m_server->display()), onOverlayPressTimer, this);
+            }
+            if (m_overlayPressTimer != nullptr) {
+              m_server->focusView(target, FocusReason::PointerPress);
+              m_overlayPress = {target, surface, m_cursor->x, m_cursor->y, sx, sy, timeMsec, false};
+              m_overlaySurfaceDestroy.notify = onOverlaySurfaceDestroy;
+              wl_signal_add(&surface->events.destroy, &m_overlaySurfaceDestroy);
+              wl_event_source_timer_update(m_overlayPressTimer, kOverlayGestureMsec);
               return;
             }
           }
-        } else if (
-            button == BTN_LEFT
-            && !target->blocked()
-            && (hit->part == SsdFramePart::Close
-                || hit->part == SsdFramePart::Minimize
-                || (hit->part == SsdFramePart::Maximize && target->ssdFrame()->maximizeEnabled()))
-        ) {
-          m_server->focusView(target, FocusReason::PointerPress);
-          m_ssdButtonPress = {target, hit->part};
-          target->ssdFrame()->setPressed(hit->part);
+        } else {
+          clearPointerFocus();
+          if (button == BTN_LEFT && hit->part == SsdFramePart::Resize) {
+            m_server->focusView(target, FocusReason::Grab);
+            if (beginResize(target, hit->edges, button)) {
+              return;
+            }
+          } else if (button == BTN_LEFT && hit->part == SsdFramePart::TitleBar) {
+            m_server->focusView(target, FocusReason::PointerPress);
+            const double dx = m_cursor->x - m_lastTitleBarClick.x;
+            const double dy = m_cursor->y - m_lastTitleBarClick.y;
+            if (m_lastTitleBarClick.view == target
+                && timeMsec - m_lastTitleBarClick.timeMsec <= kDoubleClickMsec
+                && dx * dx + dy * dy <= kDoubleClickSlop * kDoubleClickSlop) {
+              m_lastTitleBarClick = {};
+              const bool maximized =
+                  target->maximizedToEdges() || target->scheduledMaximized() || target->floatingMaximized();
+              target->setMaximizedLikeClientRequest(!maximized);
+            } else {
+              m_lastTitleBarClick = {timeMsec, m_cursor->x, m_cursor->y, target};
+              if (beginMove(target, button, true)) {
+                return;
+              }
+            }
+          } else if (
+              button == BTN_LEFT
+              && !target->blocked()
+              && (hit->part == SsdFramePart::Close
+                  || hit->part == SsdFramePart::Minimize
+                  || (hit->part == SsdFramePart::Maximize && target->ssdFrame()->maximizeEnabled()))
+          ) {
+            m_server->focusView(target, FocusReason::PointerPress);
+            m_ssdButtonPress = {target, hit->part};
+            target->ssdFrame()->setPressed(hit->part);
+          }
+          m_swallowedButtons.push_back(button);
+          return;
         }
-        m_swallowedButtons.push_back(button);
-        return;
       }
     }
 
@@ -2433,6 +2558,35 @@ namespace umbriel {
   void Cursor::handleTouchFrame() { wlr_seat_touch_notify_frame(m_server->seat()->wlr()); }
 
   void Cursor::processMotion(uint32_t timeMsec, double oldX, double oldY, bool allowFocusChange) {
+    if (m_overlayPress.view != nullptr && !m_overlayPress.released) {
+      const double dx = m_cursor->x - m_overlayPress.x;
+      const double dy = m_cursor->y - m_overlayPress.y;
+      if (m_server->sessionLocked() || !m_overlayPress.view->titleBarIsOverlay()) {
+        m_swallowedButtons.push_back(BTN_LEFT);
+        cancelOverlayPress();
+      } else if (timeMsec - m_overlayPress.timeMsec >= kOverlayGestureMsec) {
+        forwardOverlayPress(timeMsec);
+        return;
+      } else if (dx * dx + dy * dy > kDoubleClickSlop * kDoubleClickSlop) {
+        const OverlayPress press = m_overlayPress;
+        cancelOverlayPress();
+        clearPointerFocus();
+        if (beginMove(press.view, BTN_LEFT, true)) {
+          if (auto* grab = std::get_if<MoveGrab>(&m_grab)) {
+            grab->startX = press.x;
+            grab->startY = press.y;
+            grab->offsetX -= dx;
+            grab->offsetY -= dy;
+            // This gesture already crossed its threshold; do not defer it a second time.
+            beginDrag(*grab);
+          }
+        } else {
+          m_swallowedButtons.push_back(BTN_LEFT);
+        }
+      } else {
+        return;
+      }
+    }
     updateHotCorner();
     forwardEffectPointer();
     if (const wlr_drag* drag = m_server->seat()->wlr()->drag; drag != nullptr && drag->dropped) {
@@ -3637,6 +3791,12 @@ namespace umbriel {
   }
 
   void Cursor::forgetView(const View* view) {
+    if (m_overlayPress.view == view) {
+      if (!m_overlayPress.released) {
+        m_swallowedButtons.push_back(BTN_LEFT);
+      }
+      cancelOverlayPress();
+    }
     if (m_lastTitleBarClick.view == view) {
       m_lastTitleBarClick = {};
     }
@@ -3950,7 +4110,8 @@ namespace umbriel {
     }
 
     if (!modHeld) {
-      if (const auto hit = m_server->ssdFrameAt(m_cursor->x, m_cursor->y)) {
+      if (const auto hit = m_server->ssdFrameAt(m_cursor->x, m_cursor->y);
+          hit && !(hit->view->titleBarIsOverlay() && hit->part == SsdFramePart::TitleBar)) {
         const char* name = "default";
         if (hit->part == SsdFramePart::Resize) {
           name = wlr_xcursor_get_resize_name(static_cast<enum wlr_edges>(hit->edges));

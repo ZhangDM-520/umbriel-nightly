@@ -530,6 +530,7 @@ namespace umbriel {
     std::optional<double> blurIgnoreAlpha;
     std::optional<bool> blurOptimized;
     std::optional<TitleBarMode> titleBar;
+    std::optional<bool> titleBarIsOverlay;
     // Overrides [appearance.title_bar] buttons, read from the title outward.
     std::optional<std::vector<TitleBarButton>> titleBarButtons;
     // Overrides [appearance.title_bar] color_source for windows this rule matches.
@@ -633,6 +634,7 @@ namespace umbriel {
           && blurIgnoreAlpha == other.blurIgnoreAlpha
           && blurOptimized == other.blurOptimized
           && titleBar == other.titleBar
+          && titleBarIsOverlay == other.titleBarIsOverlay
           && titleBarButtons == other.titleBarButtons
           && titleBarColorSource == other.titleBarColorSource
           && titleBarHeight == other.titleBarHeight
@@ -713,6 +715,7 @@ namespace umbriel {
     std::optional<double> blurIgnoreAlpha;
     std::optional<bool> blurOptimized;
     std::optional<TitleBarMode> titleBar;
+    std::optional<bool> titleBarIsOverlay;
     std::optional<std::vector<TitleBarButton>> titleBarButtons;
     std::optional<TitleBarColorSource> titleBarColorSource;
     std::optional<int> titleBarHeight;

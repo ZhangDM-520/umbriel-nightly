@@ -1552,8 +1552,13 @@ namespace umbriel {
     m_decoration.snapshotBorders(
         snap, m_borderColorAnim.current(), m_outerBorderColorAnim.current(), effectiveOpacity(), snapBorders
     );
-    if (m_ssdFrame != nullptr && titleBarHeight() > 0) {
+    if (m_ssdFrame != nullptr && titleBarVisualHeight() > 0) {
       m_ssdFrame->snapshot(snap);
+    }
+
+    // Overlay chrome stays above the copied client surfaces.
+    if (titleBarIsOverlay()) {
+      wlr_scene_node_lower_to_bottom(&content->node);
     }
 
     // Copy client surfaces. Chrome snapshots already own their label buffers.

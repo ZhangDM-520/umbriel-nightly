@@ -33,7 +33,9 @@ namespace umbriel {
     constexpr Logger kLog("view");
   } // namespace
 
-  int View::titleBarHeight() const {
+  int View::titleBarHeight() const { return m_titleBarIsOverlay ? 0 : titleBarVisualHeight(); }
+
+  int View::titleBarVisualHeight() const {
     if (!wantsTitleBar(m_titleBarMode.value_or(config().appearance.titleBar.mode))
         || scheduledFullscreen()
         || (m_tiled && m_workspace != nullptr && m_workspace->inTabGroup(this))) {
@@ -109,14 +111,14 @@ namespace umbriel {
     if (!m_mapped) {
       return;
     }
-    const int previousHeight = m_ssdFrame != nullptr ? m_ssdFrame->titleBarHeight() : 0;
+    const int previousHeight = m_ssdFrame != nullptr ? m_ssdFrame->reservedHeight() : 0;
     if (previousHeight != titleBarHeight()) {
       if (m_workspace != nullptr) {
         m_workspace->markArrange();
       }
       m_server->scheduleIpcWindowsEvent();
     }
-    if ((titleBarHeight() > 0 || !m_tiled) && m_ssdFrame == nullptr) {
+    if ((titleBarVisualHeight() > 0 || !m_tiled) && m_ssdFrame == nullptr) {
       m_ssdFrame = std::make_unique<SsdFrame>(
           chromeParent(), TabLabelCache::shared(), m_sceneTree, m_server->colorManager(),
           wl_display_get_event_loop(m_server->display())
@@ -524,7 +526,8 @@ namespace umbriel {
         .contentHeight = contentHeight,
         .borderInset = borderInset(),
         .cornerRadius = m_maximizedToEdges ? 0 : decorationCornerRadius(),
-        .titleBarHeight = titleBarHeight(),
+        .titleBarHeight = titleBarVisualHeight(),
+        .titleBarIsOverlay = m_titleBarIsOverlay,
         .scale = output != nullptr ? output->wlr()->scale : 1.0F,
         .suppressed = !m_mapped || scheduledFullscreen() || currentFullscreen(),
     };

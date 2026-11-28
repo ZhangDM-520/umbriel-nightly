@@ -1044,6 +1044,7 @@ namespace umbriel {
         const bool opensTabbed = openingLayout.tabs.defaultDisplay == ColumnDisplay::Tabbed
             || rule.defaultColumnDisplay.value_or(ColumnDisplay::Normal) == ColumnDisplay::Tabbed;
         if (!wantMaximizeToEdges
+            && !rule.titleBarIsOverlay.value_or(false)
             && wantsTitleBar(rule.titleBar.value_or(config().appearance.titleBar.mode))
             && !opensTabbed) {
           initial.height =
@@ -1067,7 +1068,8 @@ namespace umbriel {
         m_pendingFloatingPosition = rule.defaultPosition;
       } else {
         if (wantMaximized) {
-          const int barHeight = wantsTitleBar(rule.titleBar.value_or(config().appearance.titleBar.mode))
+          const int barHeight = !rule.titleBarIsOverlay.value_or(false)
+                  && wantsTitleBar(rule.titleBar.value_or(config().appearance.titleBar.mode))
               ? rule.titleBarHeight.value_or(config().appearance.titleBar.height)
               : 0;
           const wlr_box box = floatingMaximizedBox(
