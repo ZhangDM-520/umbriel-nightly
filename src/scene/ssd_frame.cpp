@@ -295,7 +295,7 @@ namespace umbriel {
       // A bare symbol is judged against the edge under its own button, which a mirrored bar can colour differently
       // from the title's span. A button that paints its own colour never reads that edge, so it adds no span. The
       // button boxes are in the bar's coordinates, like the label.
-      const auto& colors = config().colors.titleBar;
+      const auto& colors = m_titleBarColors;
       const bool backgrounds = config().appearance.titleBar.buttonBackground;
       const auto symbolOnBar = [&](TitleBarButton which) {
         if (!backgrounds) {
@@ -348,9 +348,17 @@ namespace umbriel {
     return 0;
   }
 
+  void SsdFrame::setColors(const Config::Colors::TitleBar& colors) {
+    if (m_titleBarColors == colors) {
+      return;
+    }
+    m_titleBarColors = colors;
+    redraw();
+  }
+
   void SsdFrame::updateBlur() {
     const auto& cfg = config().appearance.blur;
-    const auto& colors = config().colors.titleBar;
+    const auto& colors = m_titleBarColors;
     const float backgroundAlpha = (m_focused ? colors.background : colors.backgroundUnfocused)[3];
     // The title bar has its own transparency, independent of the client's opaque region or alpha mask.
     const bool enabled = m_tree->node.enabled
@@ -514,7 +522,7 @@ namespace umbriel {
   }
 
   std::optional<std::array<float, 4>> SsdFrame::barFillColor() const {
-    const auto& colors = config().colors.titleBar;
+    const auto& colors = m_titleBarColors;
     // The palette shows when the adaptive fill has nothing to draw, so it is the fallback: a transparent edge, an
     // unreadable buffer and `"fixed"` all land on it.
     const std::array<float, 4>& palette = m_focused ? colors.background : colors.backgroundUnfocused;
@@ -535,7 +543,7 @@ namespace umbriel {
   }
 
   std::array<float, 4> SsdFrame::fillAsShown(const std::array<float, 4>& fill) const {
-    const auto& colors = config().colors.titleBar;
+    const auto& colors = m_titleBarColors;
     const std::array<float, 4>& palette = m_focused ? colors.background : colors.backgroundUnfocused;
     // Only an adaptive fill is drawn dimmed over the palette when the window is inactive; a fixed bar is the palette
     // itself, drawn over itself, and the palette is what shows through a fill with nothing in it.
@@ -555,7 +563,7 @@ namespace umbriel {
     }
     if (m_glyphSampleEmpty[index]) {
       // A transparent edge shows the palette through the mirrored bar, which is what the symbol sits on.
-      const auto& colors = config().colors.titleBar;
+      const auto& colors = m_titleBarColors;
       return m_focused ? colors.background : colors.backgroundUnfocused;
     }
     return displayedBarColor();
@@ -563,7 +571,7 @@ namespace umbriel {
 
   std::array<float, 4> SsdFrame::resolvedTitleColor() const {
     const auto& style = config().appearance.titleBar;
-    const auto& colors = config().colors.titleBar;
+    const auto& colors = m_titleBarColors;
     const std::array<float, 4>& configured = m_focused ? colors.text : colors.textUnfocused;
     // Judged against the bar as shown — the fill dimmed over the unfocused palette when the window is inactive — so
     // the title cannot sink into the dimming the verdict never saw.
@@ -989,7 +997,7 @@ namespace umbriel {
     if (refreshFill(false)) {
       return;
     }
-    const auto& colors = config().colors.titleBar;
+    const auto& colors = m_titleBarColors;
     const auto& style = config().appearance.titleBar;
     const bool backgrounds = style.buttonBackground;
     float color[4];
@@ -1292,6 +1300,7 @@ namespace umbriel {
       frame->m_stripDeferred = m_stripDeferred;
       frame->setColorSource(m_colorSourceOverride);
       frame->setContentSurface(m_content, m_contentGeometry);
+      frame->setColors(m_titleBarColors);
       frame->reloadConfig();
     }
   }
