@@ -957,6 +957,7 @@ namespace umbriel {
       return;
     }
 
+    Cursor* cursor = m_server->cursor();
     bool geometryChanged = false;
     bool movedEntry = false;
     for (auto& [name, scratchpad] : m_scratchpads) {
@@ -1329,8 +1330,7 @@ namespace umbriel {
   }
 
   float ScratchpadManager::backdropFadeOn(const Output* output) const {
-    const auto fade = m_backdropFades.find(const_cast<Output*>(output));
-    return fade != m_backdropFades.end() ? static_cast<float>(fade->second.current()) : 0.0F;
+    return backdropFade(const_cast<Output*>(output));
   }
 
   std::vector<View*> ScratchpadManager::visibleMembersOn(const Output* output) const {

@@ -1703,14 +1703,13 @@ UMBRIEL_TEST(windowRuleBorderColorsLoad) {
   CHECK(!store.config().windowRules[0].borderColorFocused);
 }
 
-UMBRIEL_TEST(windowRuleShadowAndTitleBarColorsLoad) {
+UMBRIEL_TEST(windowRuleTitleBarColorsLoad) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();
   store.setRootPath(file.path(), true);
 
   file.write(
       "[[window_rule]]\nmatch.app_id = \"^foot$\"\n"
-      "shadow_color = \"#11223380\"\n"
       "title_bar_background = \"#FF0000FF\"\n"
       "title_bar_background_unfocused = \"#00FF00FF\"\n"
       "title_bar_text = \"#0000FFFF\"\n"
@@ -1728,7 +1727,6 @@ UMBRIEL_TEST(windowRuleShadowAndTitleBarColorsLoad) {
   CHECK(store.reload().success);
   CHECK_EQ(store.config().windowRules.size(), size_t{1});
   const auto& rule = store.config().windowRules[0];
-  CHECK(rule.shadowColor && (*rule.shadowColor)[0] == 17.0F / 255.0F);
   CHECK(rule.titleBarBackground && (*rule.titleBarBackground)[0] == 1.0F);
   CHECK(rule.titleBarBackgroundUnfocused && (*rule.titleBarBackgroundUnfocused)[1] == 1.0F);
   CHECK(rule.titleBarText && (*rule.titleBarText)[2] == 1.0F);
@@ -1743,9 +1741,8 @@ UMBRIEL_TEST(windowRuleShadowAndTitleBarColorsLoad) {
   CHECK(rule.titleBarMinimizeGlyph.has_value());
   CHECK(rule.titleBarMinimizeGlyphHover.has_value());
 
-  file.write("[[window_rule]]\nshadow_color = 42\ntitle_bar_background = false\n");
+  file.write("[[window_rule]]\ntitle_bar_background = false\n");
   CHECK(store.reload().success);
-  CHECK(!store.config().windowRules[0].shadowColor);
   CHECK(!store.config().windowRules[0].titleBarBackground);
 }
 
@@ -1756,9 +1753,6 @@ UMBRIEL_TEST(windowRuleAppearanceOverridesLoad) {
 
   file.write(
       "[[window_rule]]\nmatch.app_id = \"^foot$\"\n"
-      "shadow_softness = 24\n"
-      "shadow_offset_x = -8\n"
-      "shadow_offset_y = 12\n"
       "drag_opacity = 0.5\n"
       "title_bar_height = 40\n"
       "title_bar_font = \"monospace 11\"\n"
@@ -1776,9 +1770,6 @@ UMBRIEL_TEST(windowRuleAppearanceOverridesLoad) {
   CHECK(store.reload().success);
   CHECK_EQ(store.config().windowRules.size(), size_t{1});
   const auto& rule = store.config().windowRules[0];
-  CHECK(rule.shadowSoftness && *rule.shadowSoftness == 24);
-  CHECK(rule.shadowOffsetX && *rule.shadowOffsetX == -8);
-  CHECK(rule.shadowOffsetY && *rule.shadowOffsetY == 12);
   CHECK(rule.dragOpacity && *rule.dragOpacity == 0.5);
   CHECK(rule.titleBarHeight && *rule.titleBarHeight == 40);
   CHECK(rule.titleBarFont && *rule.titleBarFont == "monospace 11");
