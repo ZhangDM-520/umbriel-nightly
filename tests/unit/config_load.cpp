@@ -1703,13 +1703,14 @@ UMBRIEL_TEST(windowRuleBorderColorsLoad) {
   CHECK(!store.config().windowRules[0].borderColorFocused);
 }
 
-UMBRIEL_TEST(windowRuleTitleBarColorsLoad) {
+UMBRIEL_TEST(windowRuleShadowAndTitleBarColorsLoad) {
   const TempConfig file;
   ConfigStore& store = umbriel::configStore();
   store.setRootPath(file.path(), true);
 
   file.write(
       "[[window_rule]]\nmatch.app_id = \"^foot$\"\n"
+      "shadow_color = \"#11223380\"\n"
       "title_bar_background = \"#FF0000FF\"\n"
       "title_bar_background_unfocused = \"#00FF00FF\"\n"
       "title_bar_text = \"#0000FFFF\"\n"
@@ -1727,6 +1728,7 @@ UMBRIEL_TEST(windowRuleTitleBarColorsLoad) {
   CHECK(store.reload().success);
   CHECK_EQ(store.config().windowRules.size(), size_t{1});
   const auto& rule = store.config().windowRules[0];
+  CHECK(rule.shadowColor && (*rule.shadowColor)[0] == 17.0F / 255.0F);
   CHECK(rule.titleBarBackground && (*rule.titleBarBackground)[0] == 1.0F);
   CHECK(rule.titleBarBackgroundUnfocused && (*rule.titleBarBackgroundUnfocused)[1] == 1.0F);
   CHECK(rule.titleBarText && (*rule.titleBarText)[2] == 1.0F);
@@ -1741,9 +1743,55 @@ UMBRIEL_TEST(windowRuleTitleBarColorsLoad) {
   CHECK(rule.titleBarMinimizeGlyph.has_value());
   CHECK(rule.titleBarMinimizeGlyphHover.has_value());
 
-  file.write("[[window_rule]]\ntitle_bar_background = false\n");
+  file.write("[[window_rule]]\nshadow_color = 42\ntitle_bar_background = false\n");
   CHECK(store.reload().success);
+  CHECK(!store.config().windowRules[0].shadowColor);
   CHECK(!store.config().windowRules[0].titleBarBackground);
+}
+
+UMBRIEL_TEST(windowRuleAppearanceOverridesLoad) {
+  const TempConfig file;
+  ConfigStore& store = umbriel::configStore();
+  store.setRootPath(file.path(), true);
+
+  file.write(
+      "[[window_rule]]\nmatch.app_id = \"^foot$\"\n"
+      "shadow_softness = 24\n"
+      "shadow_offset_x = -8\n"
+      "shadow_offset_y = 12\n"
+      "drag_opacity = 0.5\n"
+      "title_bar_height = 40\n"
+      "title_bar_font = \"monospace 11\"\n"
+      "title_bar_title_align = \"center\"\n"
+      "title_bar_button_position = \"left\"\n"
+      "title_bar_button_corner_radius = 4\n"
+      "title_bar_button_size = 18\n"
+      "title_bar_button_gap = 6\n"
+      "title_bar_button_padding = 10\n"
+      "title_bar_button_glyph = \"always\"\n"
+      "title_bar_button_glyph_size = 10\n"
+      "title_bar_button_glyph_stroke = 1.5\n"
+      "title_bar_button_background = false\n"
+  );
+  CHECK(store.reload().success);
+  CHECK_EQ(store.config().windowRules.size(), size_t{1});
+  const auto& rule = store.config().windowRules[0];
+  CHECK(rule.shadowSoftness && *rule.shadowSoftness == 24);
+  CHECK(rule.shadowOffsetX && *rule.shadowOffsetX == -8);
+  CHECK(rule.shadowOffsetY && *rule.shadowOffsetY == 12);
+  CHECK(rule.dragOpacity && *rule.dragOpacity == 0.5);
+  CHECK(rule.titleBarHeight && *rule.titleBarHeight == 40);
+  CHECK(rule.titleBarFont && *rule.titleBarFont == "monospace 11");
+  CHECK(rule.titleBarTitleAlign && *rule.titleBarTitleAlign == umbriel::TitleAlign::Center);
+  CHECK(rule.titleBarButtonPosition && *rule.titleBarButtonPosition == umbriel::TitleBarButtonSide::Left);
+  CHECK(rule.titleBarButtonCornerRadius && *rule.titleBarButtonCornerRadius == 4);
+  CHECK(rule.titleBarButtonSize && *rule.titleBarButtonSize == 18);
+  CHECK(rule.titleBarButtonGap && *rule.titleBarButtonGap == 6);
+  CHECK(rule.titleBarButtonPadding && *rule.titleBarButtonPadding == 10);
+  CHECK(rule.titleBarButtonGlyph && *rule.titleBarButtonGlyph == umbriel::TitleBarButtonGlyph::Always);
+  CHECK(rule.titleBarButtonGlyphSize && *rule.titleBarButtonGlyphSize == 10);
+  CHECK(rule.titleBarButtonGlyphStroke && *rule.titleBarButtonGlyphStroke == 1.5);
+  CHECK(rule.titleBarButtonBackground && !*rule.titleBarButtonBackground);
 }
 
 // Colors are recognized only inside [colors]; anywhere else they are ordinary
@@ -4110,7 +4158,6 @@ _PRIVATE = "kept"
 NOT_A_STRING = 1
 WAYLAND_DISPLAY = "wrong"
 LIBEI_SOCKET = "/nonexistent/umbriel-test-eis"
-UMBRIEL_DINIT_READY_FD = "4"
 WLR_DRM_DEVICES = "/dev/dri/card0"
 WLR_RENDER_DRM_DEVICE = "/dev/dri/renderD128"
 )");

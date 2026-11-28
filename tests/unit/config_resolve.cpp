@@ -891,25 +891,55 @@ UMBRIEL_TEST(windowRulesMergeBorderColorsLastWriterWins) {
   CHECK(merged.borderColorOuter && (*merged.borderColorOuter)[2] == 0.3F);
 }
 
-UMBRIEL_TEST(windowRulesMergeTitleBarColors) {
+UMBRIEL_TEST(windowRulesMergeShadowAndTitleBarColors) {
   Config config;
   WindowRule first;
   first.appIdPatterns.add("^foot$");
+  first.shadowColor = std::array<float, 4>{1.0F, 0.0F, 0.0F, 0.8F};
   first.titleBarBackground = std::array<float, 4>{0.2F, 0.3F, 0.4F, 1.0F};
   first.titleBarClose = std::array<float, 4>{0.9F, 0.1F, 0.1F, 1.0F};
   config.windowRules.push_back(std::move(first));
 
   WindowRule second;
   second.titlePatterns.add("override");
+  second.shadowColor = std::array<float, 4>{0.0F, 1.0F, 0.0F, 0.5F};
   second.titleBarText = std::array<float, 4>{0.8F, 0.8F, 0.8F, 1.0F};
   config.windowRules.push_back(std::move(second));
 
   const auto merged = umbriel::resolveWindowRules(config, "foot", "override", std::nullopt, ContentType::None, {}, 0);
+  CHECK(merged.shadowColor && (*merged.shadowColor)[1] == 1.0F);
   const auto colors = umbriel::resolveTitleBarColors(config.colors.titleBar, merged);
   CHECK(colors.background == (std::array<float, 4>{0.2F, 0.3F, 0.4F, 1.0F}));
   CHECK(colors.close == (std::array<float, 4>{0.9F, 0.1F, 0.1F, 1.0F}));
   CHECK(colors.text == (std::array<float, 4>{0.8F, 0.8F, 0.8F, 1.0F}));
   CHECK(colors.backgroundUnfocused == config.colors.titleBar.backgroundUnfocused);
+}
+
+UMBRIEL_TEST(windowRulesMergeAndClampAppearanceOverrides) {
+  Config config;
+  WindowRule first;
+  first.appIdPatterns.add("^foot$");
+  first.shadowSoftness = 20;
+  first.shadowOffsetX = 4;
+  first.shadowOffsetY = 6;
+  first.dragOpacity = 0.4;
+  first.titleBarHeight = 20;
+  first.titleBarButtonSize = 50;         // exceeds height 20 -> clamped to 20
+  first.titleBarButtonGlyphSize = 0;     // clamped to 1
+  first.titleBarButtonGlyphStroke = 0.1; // clamped to 0.5
+  config.windowRules.push_back(std::move(first));
+
+  const auto resolved = umbriel::resolveWindowRules(config, "foot", "shell", std::nullopt, ContentType::None, {}, 0);
+  CHECK(resolved.shadowSoftness && *resolved.shadowSoftness == 20);
+  CHECK(resolved.shadowOffsetX && *resolved.shadowOffsetX == 4);
+  CHECK(resolved.shadowOffsetY && *resolved.shadowOffsetY == 6);
+  CHECK(resolved.dragOpacity && *resolved.dragOpacity == 0.4);
+
+  const auto style = umbriel::resolveTitleBarStyle(config.appearance.titleBar, resolved);
+  CHECK_EQ(style.height, 20);
+  CHECK_EQ(style.buttonSize, 20);
+  CHECK_EQ(style.buttonGlyphSize, 1);
+  CHECK_EQ(style.buttonGlyphStroke, 0.5);
 }
 
 UMBRIEL_TEST(windowRulesMatchContentTypesAndComposeSelectors) {

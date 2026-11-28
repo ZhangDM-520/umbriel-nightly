@@ -234,6 +234,7 @@ namespace umbriel {
     void setXdgDecorationPreference(std::optional<bool> serverSide);
     void setLegacyDecorationPreference(std::optional<bool> serverSide);
     int titleBarHeight() const;
+    float dragOpacity() const;
     void syncSsdFrame();
     SsdFramePoint ssdFramePointAt(double lx, double ly) const;
     SsdFrame* ssdFrame() const { return m_ssdFrame.get(); }
@@ -1078,6 +1079,7 @@ namespace umbriel {
     std::optional<FloatingSizeConfigure> m_floatingSizeConfigure;
     bool m_deferXwaylandConfigure = false;
     bool m_xwaylandResizeConfigurePending = false;
+    bool m_pointerResizeSettling = false;
     // applyPresentedCrop programmed the buffer; the surface clip alone no longer describes it.
     bool m_presentedCropActive = false;
     std::optional<std::string> m_xdgTag;
@@ -1109,6 +1111,9 @@ namespace umbriel {
     // Hand the frame the configured buttons this window can use now: minimize only while it can minimize.
     void syncTitleBarButtons();
     void syncTitleBarColors();
+    Config::Appearance::TitleBar m_titleBarStyle = config().appearance.titleBar;
+    std::optional<double> m_ruleDragOpacity;
+    void syncTitleBarStyle();
     int m_chromeContentWidth = 0;
     int m_chromeContentHeight = 0;
     bool m_tabHidden = false;
