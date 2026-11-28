@@ -2133,6 +2133,11 @@ namespace umbriel {
     }
     m_handlingFrame = true;
 
+    // A resize grab may have taken several pointer events since the last frame. Apply its newest box here, before the
+    // scene is built, so the drawn edge still tracks the pointer at frame cadence and the damage belongs to this frame.
+    if (Cursor* cursor = m_server->cursor()) {
+      cursor->flushResizeTarget();
+    }
     flushDirty();
     if (m_hasDeferredMode) {
       m_hasDeferredMode = false;
